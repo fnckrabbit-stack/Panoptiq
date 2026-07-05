@@ -1,0 +1,1321 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#050505">
+<title>PANOPTIQ // Personal Build</title>
+<style>
+  :root {
+    --amber: #FFB000;
+    --amber-dim: #8A6200;
+    --amber-ghost: rgba(255,176,0,0.14);
+    --alert: #FF2A2A;
+    --cyan: #35E0FF;
+    --bg: #050505;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-t: env(safe-area-inset-top, 0px);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--bg); }
+  body {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--amber);
+    user-select: none; -webkit-user-select: none;
+  }
+  #stage { position:fixed; inset:0; background:#000; }
+  #cam { display:none; }
+  #view, #hud { position:absolute; inset:0; width:100%; height:100%; }
+  #view { image-rendering: pixelated; }
+
+  /* ---------- Boot screen ---------- */
+  #boot {
+    position:fixed; inset:0; background:var(--bg); z-index:50;
+    display:flex; flex-direction:column; justify-content:center; align-items:center;
+    padding: 24px; gap: 28px;
+  }
+  #boot h1 {
+    font-size: 26px; letter-spacing: 0.42em; font-weight: 700;
+    color: var(--amber); text-shadow: 0 0 18px rgba(255,176,0,0.5);
+  }
+  #boot h1 span { color: var(--amber-dim); }
+  #bootlog {
+    width: min(360px, 86vw); height: 150px; overflow:hidden;
+    font-size: 11px; line-height: 1.7; color: var(--amber-dim);
+    border-left: 1px solid var(--amber-dim); padding-left: 12px;
+  }
+  #bootlog .ok { color: var(--amber); }
+  #initBtn {
+    font-family: inherit; font-size: 14px; letter-spacing: 0.3em;
+    color: var(--bg); background: var(--amber);
+    border: none; padding: 16px 42px; cursor: pointer;
+    box-shadow: 0 0 24px rgba(255,176,0,0.35);
+    opacity: 0; transition: opacity .4s;
+  }
+  #initBtn.ready { opacity: 1; }
+  #bootErr { color: var(--alert); font-size: 11px; max-width: 320px; text-align:center; line-height:1.6; }
+
+  /* ---------- Controls ---------- */
+  #controls {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    padding: 10px 12px calc(12px + var(--safe-b));
+    background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0));
+    display: none; flex-direction: column; gap: 10px;
+  }
+  #modes { display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; }
+  #modes::-webkit-scrollbar { display:none; }
+  .chip {
+    font-family: inherit; font-size: 11px; letter-spacing: 0.18em;
+    padding: 9px 14px; white-space: nowrap; cursor: pointer;
+    color: var(--amber-dim); background: rgba(0,0,0,0.55);
+    border: 1px solid var(--amber-dim); border-radius: 2px;
+  }
+  .chip.active { color: var(--bg); background: var(--amber); border-color: var(--amber); }
+  .chip.ai-on { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
+  #subrow { display:flex; align-items:center; gap:12px; font-size:10px; letter-spacing:0.15em; color:var(--amber-dim); }
+  #sens { flex:1; accent-color: var(--amber); height: 22px; }
+
+  /* ---------- Tools panel / Report / Scanlines ---------- */
+  #scan {
+    position: fixed; inset: 0; pointer-events: none; z-index: 15; display: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.28) 0 1px, transparent 1px 3px);
+  }
+  #tools, #report, #archive {
+    position: fixed; inset: 0; z-index: 30; display: none;
+    background: rgba(0,0,0,0.9); overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: calc(18px + var(--safe-t)) 16px calc(24px + var(--safe-b));
+  }
+  #tools h2 {
+    font-size: 11px; font-weight: 400; letter-spacing: 0.28em;
+    color: var(--amber); margin: 20px 0 10px;
+  }
+  .tgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .tgl {
+    font-family: inherit; font-size: 10px; letter-spacing: 0.12em;
+    padding: 12px 4px; cursor: pointer; text-align: center;
+    color: var(--amber-dim); background: rgba(0,0,0,0.55);
+    border: 1px solid var(--amber-dim); border-radius: 2px;
+  }
+  .tgl.on { color: var(--bg); background: var(--amber); border-color: var(--amber); }
+  .tlabel { font-size: 10px; letter-spacing: 0.15em; color: var(--amber-dim); margin-top: 16px; }
+  .tslider { width: 100%; margin: 10px 0 2px; accent-color: var(--amber); height: 22px; }
+  #report pre {
+    font-family: inherit; font-size: 10px; line-height: 1.8;
+    color: var(--amber); white-space: pre-wrap; margin-bottom: 20px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="boot">
+  <h1>PANOPTIQ<span>_04</span></h1>
+  <div id="bootlog"></div>
+  <button id="initBtn">INITIALIZE</button>
+  <div id="bootErr"></div>
+</div>
+
+<div id="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="view"></canvas>
+  <canvas id="hud"></canvas>
+</div>
+
+<div id="controls">
+  <div id="modes"></div>
+  <div id="subrow">
+    <span>SENS</span>
+    <input id="sens" type="range" min="1" max="10" value="5">
+    <button id="trkBtn" class="chip active">TRK</button>
+    <button id="snapBtn" class="chip">SNAP</button>
+    <button id="toolsBtn" class="chip">TOOLS</button>
+    <button id="aiBtn" class="chip">AI: OFF</button>
+  </div>
+</div>
+
+<div id="scan"></div>
+
+<div id="tools">
+  <h2>TRACKING + SENSOR OVERLAYS</h2>
+  <div class="tgrid">
+    <button class="tgl on" data-t="blips">MOTION ARRAY</button>
+    <button class="tgl" data-t="autolock">AUTO LOCK</button>
+    <button class="tgl on" data-t="trk">AUTO-MAG</button>
+    <button class="tgl on" data-t="radar">RADAR</button>
+    <button class="tgl on" data-t="hud">MAIN HUD</button>
+    <button class="tgl" data-t="scan">SCANLINES</button>
+    <button class="tgl" data-t="heat">HEATMAP TRAIL</button>
+    <button class="tgl on" data-t="vec">VECTOR PATH</button>
+    <button class="tgl" data-t="horizon">HORIZON</button>
+    <button class="tgl" data-t="voice">VOICE</button>
+    <button class="tgl" id="audioBtn">AUDIO SIG</button>
+    <button class="tgl" id="themeBtn">THEME: AMBER</button>
+  </div>
+  <h2>SENTRY + AUFNAHME</h2>
+  <div class="tgrid">
+    <button class="tgl" data-t="sentry">SENTRY MODE</button>
+    <button class="tgl" id="vrecBtn">VIDEO REC</button>
+    <button class="tgl" id="archBtn">SNAP ARCHIV</button>
+  </div>
+  <h2>KI / LERNEN</h2>
+  <div class="tgrid">
+    <button class="tgl" id="learnBtn">LEARN TARGET</button>
+    <button class="tgl" id="clearLearnBtn">CLEAR LEARNED</button>
+  </div>
+  <h2>KAMERA + SESSION</h2>
+  <div class="tgrid">
+    <button class="tgl" id="camSwitch">SWITCH CAMERA</button>
+    <button class="tgl" id="recBtn">DATA REC</button>
+    <button class="tgl" id="reportBtn">MAKE REPORT</button>
+  </div>
+  <div class="tlabel">DIGITAL CAMERA ZOOM: <span id="zoomVal">1.0x</span></div>
+  <input class="tslider" id="zoomSl" type="range" min="10" max="50" value="10">
+  <div class="tlabel">MOTION ARRAY DENSITY &mdash; MAX POINTS: <span id="densVal">2400</span></div>
+  <input class="tslider" id="densSl" type="range" min="200" max="6000" step="100" value="2400">
+  <button id="toolsClose" class="chip" style="margin-top:26px;width:100%;padding:14px;">TOOLS CLOSE</button>
+</div>
+
+<div id="report">
+  <pre id="reportText"></pre>
+  <button id="reportClose" class="chip" style="width:100%;padding:14px;">CLOSE</button>
+</div>
+
+<div id="archive">
+  <div id="archMeta" style="font-size:10px;letter-spacing:0.15em;color:var(--amber);margin-bottom:12px;">ARCHIV LEER</div>
+  <img id="archImg" style="width:100%;border:1px solid var(--amber-dim);display:none;" alt="Snapshot">
+  <div style="display:flex;gap:8px;margin-top:14px;">
+    <button id="archPrev" class="chip" style="flex:1;">PREV</button>
+    <button id="archNext" class="chip" style="flex:1;">NEXT</button>
+    <button id="archDel" class="chip" style="flex:1;">DELETE</button>
+    <button id="archSave" class="chip" style="flex:1;">SAVE</button>
+  </div>
+  <button id="archClose" class="chip" style="width:100%;padding:14px;margin-top:14px;">CLOSE</button>
+</div>
+
+<script>
+"use strict";
+
+/* ================= State ================= */
+const MODES = ["RAW","EDGE","THERMAL","NVIS","SONAR","PSX","ASCII"];
+let mode = "RAW";
+let sensitivity = 5;
+let aiEnabled = false, aiModel = null, aiLoading = false, aiBoxes = [], aiLastRun = 0;
+let gps = null, heading = null;
+let motionLevel = 0, motionCells = [], motionAlertUntil = 0, motionPoints = [];
+let lock = null, pitch = null, roll = null;
+let tracks = [], nextTrackId = 1, autoTrack = true;
+let showBlips = true, showRadar = true, showHud = true, autoLock = false;
+let digitalZoom = 1, blipMax = 2400, camFacing = "environment";
+let rec = null;
+let theme = 0;
+const THEMES = [
+  { main: "#FFB000", dim: "#8A6200", blip: "rgba(255,200,70,0.9)" },
+  { main: "#33FF66", dim: "#1E7A38", blip: "rgba(100,255,150,0.9)" },
+  { main: "#FF4444", dim: "#7A1E1E", blip: "rgba(255,120,120,0.9)" }
+];
+const THEME_NAMES = ["AMBER", "PHOSPHOR", "CRIMSON"];
+let heatOn = false, vecOn = true, horizonOn = false, voiceOn = false;
+let sentry = false, sentryArmAt = 0, lastAlarm = -99999;
+let audioAnalyser = null, audioBuf = null, audioLevel = 0;
+let vRec = null, vChunks = [], recC = null, recX2 = null;
+let aiRaw = [];
+let featNet = null, knn = null, learnBusy = false, learnedLabel = "", learnedAt = -99999, learnLastRun = 0;
+let prevLuma = null, prevW = 0;
+let fps = 0, frames = 0, fpsLast = performance.now();
+let running = false;
+
+const video = document.getElementById("cam");
+const viewC = document.getElementById("view");
+const hudC  = document.getElementById("hud");
+const viewX = viewC.getContext("2d");
+const hudX  = hudC.getContext("2d");
+const proc  = document.createElement("canvas");
+const procX = proc.getContext("2d", { willReadFrequently: true });
+
+const GRID = 10;               // motion grid columns
+const DIFF_T = 26;             // per-pixel luma diff threshold
+
+/* ================= Boot sequence ================= */
+const bootLines = [
+  "loading kernel .............. [ok]",
+  "optic pipeline .............. [ok]",
+  "motion diff engine .......... [ok]",
+  "render modes x6 ............. [ok]",
+  "geo uplink .................. [standby]",
+  "neural module ............... [standby]",
+  "awaiting operator input _"
+];
+const logEl = document.getElementById("bootlog");
+const initBtn = document.getElementById("initBtn");
+let li = 0;
+(function typeLog(){
+  if (li < bootLines.length) {
+    const d = document.createElement("div");
+    d.textContent = bootLines[li];
+    if (bootLines[li].includes("[ok]")) d.className = "ok";
+    logEl.appendChild(d);
+    li++;
+    setTimeout(typeLog, 150);
+  } else {
+    initBtn.classList.add("ready");
+  }
+})();
+
+initBtn.addEventListener("click", start);
+
+async function start() {
+  initBtn.disabled = true;
+  try {
+    // iOS: Kompass-Berechtigung muss aus einer User-Geste heraus angefragt werden
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
+    }
+    window.addEventListener("deviceorientation", e => {
+      if (typeof e.webkitCompassHeading === "number") heading = e.webkitCompassHeading;
+      else if (e.alpha != null) heading = (360 - e.alpha) % 360;
+      if (e.beta != null) pitch = e.beta;
+      if (e.gamma != null) roll = e.gamma;
+    });
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment", width: { ideal: 1280 } },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(
+        p => { gps = p.coords; },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 5000 }
+      );
+    }
+
+    document.getElementById("boot").style.display = "none";
+    document.getElementById("controls").style.display = "flex";
+    resize();
+    running = true;
+    requestAnimationFrame(loop);
+  } catch (err) {
+    initBtn.disabled = false;
+    document.getElementById("bootErr").textContent =
+      "CAMERA ACCESS DENIED — Seite muss über HTTPS laufen und Kamerazugriff braucht deine Zustimmung. (" + err.name + ")";
+  }
+}
+
+/* ================= UI ================= */
+const modesEl = document.getElementById("modes");
+MODES.forEach(m => {
+  const b = document.createElement("button");
+  b.className = "chip" + (m === mode ? " active" : "");
+  b.textContent = m;
+  b.addEventListener("click", () => {
+    mode = m;
+    prevLuma = null; // Grid-Reset bei Auflösungswechsel
+    document.querySelectorAll("#modes .chip").forEach(c => c.classList.toggle("active", c.textContent === m));
+  });
+  modesEl.appendChild(b);
+});
+
+document.getElementById("sens").addEventListener("input", e => sensitivity = +e.target.value);
+
+document.getElementById("trkBtn").addEventListener("click", e => {
+  autoTrack = !autoTrack;
+  if (!autoTrack) tracks = [];
+  e.target.classList.toggle("active", autoTrack);
+  const p = document.querySelector('.tgl[data-t="trk"]');
+  if (p) p.classList.toggle("on", autoTrack);
+});
+
+/* ---- Tools-Panel ---- */
+const toolsEl = document.getElementById("tools");
+document.getElementById("toolsBtn").addEventListener("click", () => toolsEl.style.display = "block");
+document.getElementById("toolsClose").addEventListener("click", () => toolsEl.style.display = "none");
+
+document.querySelectorAll(".tgl[data-t]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const on = !btn.classList.contains("on");
+    btn.classList.toggle("on", on);
+    switch (btn.dataset.t) {
+      case "blips": showBlips = on; break;
+      case "radar": showRadar = on; break;
+      case "hud": showHud = on; break;
+      case "autolock": autoLock = on; if (!on && lock && lock.auto) lock = null; break;
+      case "scan": document.getElementById("scan").style.display = on ? "block" : "none"; break;
+      case "heat": heatOn = on; if (on) heatX2.clearRect(0, 0, heatC.width, heatC.height); break;
+      case "vec": vecOn = on; break;
+      case "horizon": horizonOn = on; break;
+      case "voice": voiceOn = on; if (on && "speechSynthesis" in window) speechSynthesis.getVoices(); break;
+      case "sentry": setSentry(on); break;
+      case "trk":
+        autoTrack = on;
+        if (!on) tracks = [];
+        document.getElementById("trkBtn").classList.toggle("active", on);
+        break;
+    }
+  });
+});
+
+document.getElementById("zoomSl").addEventListener("input", e => {
+  digitalZoom = e.target.value / 10;
+  document.getElementById("zoomVal").textContent = digitalZoom.toFixed(1) + "x";
+  prevLuma = null;
+});
+document.getElementById("densSl").addEventListener("input", e => {
+  blipMax = +e.target.value;
+  document.getElementById("densVal").textContent = blipMax;
+});
+
+document.getElementById("camSwitch").addEventListener("click", async () => {
+  if (!running) return;
+  camFacing = camFacing === "environment" ? "user" : "environment";
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: camFacing, width: { ideal: 1280 } }, audio: false
+    });
+    if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+    video.srcObject = s;
+    await video.play();
+    prevLuma = null; tracks = []; lock = null;
+  } catch (e) {}
+});
+
+document.getElementById("recBtn").addEventListener("click", e => {
+  if (rec) { rec = null; e.target.classList.remove("on"); return; }
+  rec = {
+    start: Date.now(), frames: 0, motSum: 0, peak: 0, det: {}, log: [], lastLog: 0,
+    gps0: gps ? gps.latitude.toFixed(5) + ", " + gps.longitude.toFixed(5) : "kein Fix"
+  };
+  e.target.classList.add("on");
+});
+
+document.getElementById("reportBtn").addEventListener("click", () => {
+  const el = document.getElementById("reportText");
+  if (!rec) {
+    el.textContent = "PANOPTIQ // SESSION REPORT\n==========================\n\nKEINE AKTIVE AUFZEICHNUNG.\n\nStarte zuerst DATA REC, lass die Session laufen und erzeuge den Report danach.";
+  } else {
+    const dur = Math.round((Date.now() - rec.start) / 1000);
+    const keys = Object.keys(rec.det).sort((a, b2) => rec.det[b2] - rec.det[a]);
+    el.textContent =
+      "PANOPTIQ // SESSION REPORT\n==========================\n" +
+      "DURATION: " + dur + "s\n" +
+      "FRAME SAMPLES: " + rec.frames + "\n" +
+      "MOTION SAMPLE TOTAL: " + rec.motSum + "\n" +
+      "PEAK MOTION POINTS: " + rec.peak + "\n" +
+      "GPS START: " + rec.gps0 + "\n" +
+      "GPS NOW: " + (gps ? gps.latitude.toFixed(5) + ", " + gps.longitude.toFixed(5) : "kein Fix") + "\n" +
+      "HDG: " + (heading != null ? Math.round(heading) + "\u00B0" : "---") + "\n" +
+      "\nOBJECT BREAKDOWN (KI)\n" +
+      (keys.length ? keys.map(k => k + ": " + rec.det[k] + "x").join("\n") : "(keine Erkennungen \u2014 AI einschalten)") +
+      "\n\nDETECTION LOG\n" +
+      (rec.log.length ? rec.log.join("\n") : "(leer)");
+  }
+  document.getElementById("report").style.display = "block";
+});
+document.getElementById("reportClose").addEventListener("click", () => document.getElementById("report").style.display = "none");
+
+document.getElementById("snapBtn").addEventListener("click", () => doSnap(false));
+
+document.getElementById("themeBtn").addEventListener("click", e => {
+  theme = (theme + 1) % THEMES.length;
+  applyTheme();
+  e.target.textContent = "THEME: " + THEME_NAMES[theme];
+});
+
+document.getElementById("audioBtn").addEventListener("click", async e => {
+  if (audioAnalyser) { audioAnalyser = null; audioLevel = 0; e.target.classList.remove("on"); return; }
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ac = audioCtx();
+    const src = ac.createMediaStreamSource(s);
+    const an = ac.createAnalyser();
+    an.fftSize = 256;
+    src.connect(an);
+    audioBuf = new Uint8Array(an.frequencyBinCount);
+    audioAnalyser = an;
+    e.target.classList.add("on");
+  } catch (err) {}
+});
+
+document.getElementById("vrecBtn").addEventListener("click", e => toggleVideoRec(e.target));
+
+document.getElementById("archBtn").addEventListener("click", archOpen);
+document.getElementById("archClose").addEventListener("click", () => document.getElementById("archive").style.display = "none");
+document.getElementById("archPrev").addEventListener("click", () => { archIdx--; archShow(); });
+document.getElementById("archNext").addEventListener("click", () => { archIdx++; archShow(); });
+document.getElementById("archSave").addEventListener("click", () => {
+  if (!archList.length) return;
+  const a = document.createElement("a");
+  a.href = archList[archIdx].img;
+  a.download = "panoptiq_snap_" + archList[archIdx].id + ".jpg";
+  document.body.appendChild(a); a.click(); a.remove();
+});
+document.getElementById("archDel").addEventListener("click", () => {
+  if (!archList.length) return;
+  const id = archList[archIdx].id;
+  idb().then(d => { if (d) d.transaction("snaps", "readwrite").objectStore("snaps").delete(id); });
+  archList.splice(archIdx, 1);
+  archShow();
+});
+
+document.getElementById("learnBtn").addEventListener("click", async e => {
+  if (learnBusy) return;
+  if (!lock) { alert("Zuerst ein Ziel per Tap anvisieren (LOCK), dann LEARN dr\u00fccken."); return; }
+  const name = prompt("Name f\u00fcr dieses Ziel:");
+  if (!name || !name.trim()) return;
+  learnBusy = true;
+  e.target.textContent = "LEARNING\u2026";
+  try {
+    await ensureLearner();
+    if (lock) {
+      knn.addExample(featNet.infer(lockCrop(), true), name.trim().toUpperCase());
+      e.target.textContent = "LEARNED \u2713";
+    } else e.target.textContent = "KEIN LOCK";
+  } catch (err) {
+    e.target.textContent = "LEARN FAILED";
+  }
+  learnBusy = false;
+  setTimeout(() => e.target.textContent = "LEARN TARGET", 1600);
+});
+document.getElementById("clearLearnBtn").addEventListener("click", e => {
+  if (knn) knn.clearAllClasses();
+  learnedLabel = "";
+  e.target.textContent = "CLEARED \u2713";
+  setTimeout(() => e.target.textContent = "CLEAR LEARNED", 1200);
+});
+
+const aiBtn = document.getElementById("aiBtn");
+aiBtn.addEventListener("click", async () => {
+  if (aiLoading) return;
+  if (aiEnabled) {
+    aiEnabled = false; aiBoxes = [];
+    aiBtn.textContent = "AI: OFF"; aiBtn.classList.remove("ai-on");
+    return;
+  }
+  if (!aiModel) {
+    aiLoading = true; aiBtn.textContent = "AI: LOADING…";
+    try {
+      await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js");
+      await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js");
+      aiModel = await cocoSsd.load({ base: "mobilenet_v2" });
+    } catch (e) {
+      aiBtn.textContent = "AI: FAILED"; aiLoading = false; return;
+    }
+    aiLoading = false;
+  }
+  aiEnabled = true;
+  aiBtn.textContent = "AI: ON"; aiBtn.classList.add("ai-on");
+});
+
+/* Tap-to-Lock: Antippen setzt ein Ziel, erneutes Antippen in der Nähe löst es */
+document.getElementById("stage").addEventListener("pointerdown", e => {
+  if (!running) return;
+  if (sentry) { setSentry(false); return; }
+  const x = e.clientX / innerWidth, y = e.clientY / innerHeight;
+  if (lock && Math.hypot(x - lock.x, y - lock.y) < 0.12) { lock = null; return; }
+  lock = { x, y };
+});
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
+/* ================= Themes ================= */
+function applyTheme() {
+  const T = THEMES[theme];
+  document.documentElement.style.setProperty("--amber", T.main);
+  document.documentElement.style.setProperty("--amber-dim", T.dim);
+}
+
+/* ================= Audio ================= */
+let AC = null;
+function audioCtx() {
+  if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+  if (AC.state === "suspended") AC.resume();
+  return AC;
+}
+function beep(f, d, t0) {
+  const ac = audioCtx();
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = "square"; o.frequency.value = f;
+  g.gain.value = 0.14; o.connect(g); g.connect(ac.destination);
+  const st = ac.currentTime + (t0 || 0);
+  o.start(st); o.stop(st + d);
+}
+function alarmSound() { beep(880, 0.12); beep(620, 0.12, 0.16); beep(880, 0.16, 0.32); }
+
+/* ================= Heatmap Trail ================= */
+const heatC = document.createElement("canvas");
+heatC.width = 160; heatC.height = 284;
+const heatX2 = heatC.getContext("2d");
+
+/* ================= ASCII Renderer ================= */
+function renderAscii(luma, pw, ph) {
+  const CW = viewC.width, CHT = viewC.height;
+  viewX.fillStyle = "#000";
+  viewX.fillRect(0, 0, CW, CHT);
+  const cols = 60, rowsA = Math.max(1, Math.round(cols * CHT / CW * 0.55));
+  const lineH = CHT / rowsA;
+  viewX.fillStyle = THEMES[theme].main;
+  viewX.font = Math.ceil(lineH * 0.95) + "px ui-monospace, Menlo, monospace";
+  const CHSET = " .:-=+*#%@";
+  for (let r2 = 0; r2 < rowsA; r2++) {
+    let line = "";
+    const ly2 = Math.min(ph - 1, Math.round((r2 + 0.5) / rowsA * ph));
+    for (let c2 = 0; c2 < cols; c2++) {
+      const lx2 = Math.min(pw - 1, Math.round((c2 + 0.5) / cols * pw));
+      line += CHSET[Math.min(9, (luma[ly2 * pw + lx2] * 10) >> 8)];
+    }
+    const wpx = viewX.measureText(line).width || 1;
+    viewX.save();
+    viewX.scale(CW / wpx, 1);
+    viewX.fillText(line, 0, (r2 + 0.9) * lineH);
+    viewX.restore();
+  }
+}
+
+/* ================= Snapshot + Archiv (IndexedDB) ================= */
+let db = null;
+function idb() {
+  return new Promise(res => {
+    if (db) return res(db);
+    try {
+      const r = indexedDB.open("panoptiq", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("snaps", { keyPath: "id", autoIncrement: true });
+      r.onsuccess = () => { db = r.result; res(db); };
+      r.onerror = () => res(null);
+    } catch (e) { res(null); }
+  });
+}
+function doSnap(auto) {
+  if (!running) return;
+  const c = document.createElement("canvas");
+  c.width = viewC.width; c.height = viewC.height;
+  const x = c.getContext("2d");
+  x.drawImage(viewC, 0, 0);
+  x.drawImage(hudC, 0, 0);
+  const url = c.toDataURL("image/jpeg", 0.72);
+  idb().then(d => {
+    if (d) d.transaction("snaps", "readwrite").objectStore("snaps").add({ t: Date.now(), img: url });
+  });
+  if (!auto) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "panoptiq_snap_" + new Date().toISOString().replace(/[:.]/g, "-") + ".jpg";
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+}
+let archList = [], archIdx = 0;
+function archShow() {
+  const img = document.getElementById("archImg");
+  const meta = document.getElementById("archMeta");
+  if (!archList.length) {
+    img.style.display = "none";
+    meta.textContent = "ARCHIV LEER \u2014 SNAP oder SENTRY erzeugen Eintr\u00e4ge";
+    return;
+  }
+  archIdx = (archIdx + archList.length) % archList.length;
+  const s = archList[archIdx];
+  img.src = s.img; img.style.display = "block";
+  meta.textContent = "SNAP " + (archIdx + 1) + "/" + archList.length + "  //  " + new Date(s.t).toLocaleString("de-DE");
+}
+function archOpen() {
+  idb().then(d => {
+    if (!d) { archList = []; archShow(); return; }
+    const req = d.transaction("snaps").objectStore("snaps").getAll();
+    req.onsuccess = () => { archList = req.result || []; archIdx = archList.length - 1; archShow(); };
+    req.onerror = () => { archList = []; archShow(); };
+  });
+  document.getElementById("archive").style.display = "block";
+}
+
+/* ================= Video-Recording ================= */
+function toggleVideoRec(btn) {
+  if (vRec) { try { vRec.stop(); } catch (e) {} return; }
+  recC = document.createElement("canvas");
+  recC.width = viewC.width; recC.height = viewC.height;
+  recX2 = recC.getContext("2d");
+  let mime = "";
+  for (const mt of ["video/mp4", "video/webm;codecs=vp9", "video/webm"])
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(mt)) { mime = mt; break; }
+  try {
+    vRec = new MediaRecorder(recC.captureStream(30), mime ? { mimeType: mime } : undefined);
+  } catch (e) { vRec = null; recC = null; return; }
+  vChunks = [];
+  vRec.ondataavailable = ev => { if (ev.data && ev.data.size) vChunks.push(ev.data); };
+  vRec.onstop = () => {
+    const blob = new Blob(vChunks, { type: vRec.mimeType || "video/webm" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "panoptiq_rec_" + Date.now() + ((vRec.mimeType || "").includes("mp4") ? ".mp4" : ".webm");
+    document.body.appendChild(a); a.click(); a.remove();
+    vRec = null; recC = null;
+    btn.classList.remove("on");
+  };
+  vRec.start(1000);
+  btn.classList.add("on");
+}
+
+/* ================= Lern-KI (LEARN TARGET) ================= */
+async function ensureLearner() {
+  if (featNet && knn) return;
+  if (!window.tf) await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js");
+  await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js");
+  await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.6/dist/knn-classifier.min.js");
+  featNet = await mobilenet.load({ version: 2, alpha: 0.5 });
+  knn = knnClassifier.create();
+}
+function lockCrop() {
+  const vz = vidRect();
+  const sw = vz.sw / 3, sh = vz.sh / 3;
+  const sx = Math.max(0, Math.min(video.videoWidth - sw, vz.sx + lock.x * vz.sw - sw / 2));
+  const sy = Math.max(0, Math.min(video.videoHeight - sh, vz.sy + lock.y * vz.sh - sh / 2));
+  const c = document.createElement("canvas");
+  c.width = 224; c.height = 224;
+  c.getContext("2d").drawImage(video, sx, sy, sw, sh, 0, 0, 224, 224);
+  return c;
+}
+function classifyLock() {
+  try {
+    const logits = featNet.infer(lockCrop(), true);
+    knn.predictClass(logits, 5).then(r => {
+      logits.dispose();
+      if (r.confidences[r.label] >= 0.7) {
+        learnedLabel = r.label + " " + Math.round(r.confidences[r.label] * 100) + "%";
+        learnedAt = performance.now();
+      }
+    }).catch(() => logits.dispose());
+  } catch (e) {}
+}
+function setSentry(on) {
+  sentry = on;
+  viewC.style.filter = on ? "brightness(0.14)" : "";
+  if (on) { sentryArmAt = performance.now() + 5000; audioCtx(); }
+  const pb = document.querySelector('.tgl[data-t="sentry"]');
+  if (pb) pb.classList.toggle("on", on);
+}
+
+/* ================= Sizing ================= */
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  for (const c of [viewC, hudC]) {
+    c.width  = Math.round(innerWidth * dpr);
+    c.height = Math.round(innerHeight * dpr);
+  }
+  hudX.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener("resize", resize);
+
+/* ================= Thermal LUT ================= */
+const IRON = (() => {
+  const stops = [[0,0,0],[40,0,80],[130,0,130],[210,45,20],[255,130,0],[255,225,60],[255,255,255]];
+  const lut = new Uint8Array(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255 * (stops.length - 1);
+    const a = stops[Math.floor(t)], b = stops[Math.min(Math.ceil(t), stops.length - 1)];
+    const f = t - Math.floor(t);
+    for (let k = 0; k < 3; k++) lut[i*3+k] = a[k] + (b[k] - a[k]) * f;
+  }
+  return lut;
+})();
+const BAYER = [0,8,2,10, 12,4,14,6, 3,11,1,9, 15,7,13,5];
+
+/* ================= Digital Zoom ================= */
+function vidRect() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const sw = vw / digitalZoom, sh = vh / digitalZoom;
+  return { sx: (vw - sw) / 2, sy: (vh - sh) / 2, sw, sh };
+}
+
+/* ================= Main loop ================= */
+function loop(now) {
+  if (!running) return;
+  requestAnimationFrame(loop);
+  if (video.readyState < 2) return;
+
+  frames++;
+  if (now - fpsLast > 500) { fps = Math.round(frames * 1000 / (now - fpsLast)); frames = 0; fpsLast = now; }
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw) return;
+
+  // Verarbeitungsauflösung je Modus
+  const pw = (mode === "PSX") ? 160 : 240;
+  const ph = Math.round(pw * vh / vw);
+  if (proc.width !== pw || proc.height !== ph) { proc.width = pw; proc.height = ph; prevLuma = null; }
+
+  const vr = vidRect();
+  procX.drawImage(video, vr.sx, vr.sy, vr.sw, vr.sh, 0, 0, pw, ph);
+  const img = procX.getImageData(0, 0, pw, ph);
+  const d = img.data;
+
+  // ---- Luma + Motion-Diff auf Rasterzellen ----
+  const n = pw * ph;
+  const luma = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const j = i * 4;
+    luma[i] = (d[j] * 77 + d[j+1] * 150 + d[j+2] * 29) >> 8;
+  }
+  const rows = Math.round(GRID * ph / pw);
+  const cellW = pw / GRID, cellH = ph / rows;
+  const cellHits = new Uint16Array(GRID * rows);
+  let hits = 0;
+  motionPoints = [];
+  if (prevLuma && prevW === pw) {
+    for (let y = 0; y < ph; y++) {
+      const cy = Math.min(rows - 1, (y / cellH) | 0);
+      for (let x = 0; x < pw; x++) {
+        const i = y * pw + x;
+        if (Math.abs(luma[i] - prevLuma[i]) > DIFF_T) {
+          cellHits[cy * GRID + Math.min(GRID - 1, (x / cellW) | 0)]++;
+          if ((hits % 4) === 0 && motionPoints.length < blipMax)
+            motionPoints.push(x / pw, y / ph);
+          hits++;
+        }
+      }
+    }
+  }
+  prevLuma = luma; prevW = pw;
+  motionLevel = hits / n;
+  const cellMin = cellW * cellH * (0.32 - sensitivity * 0.026); // Sens 1 → träge, 10 → nervös
+  motionCells = [];
+  for (let cy = 0; cy < rows; cy++)
+    for (let cx = 0; cx < GRID; cx++)
+      if (cellHits[cy * GRID + cx] > cellMin) motionCells.push([cx / GRID, cy / rows, 1 / GRID, 1 / rows]);
+  if (motionCells.length > 0) motionAlertUntil = now + 900;
+
+  // Lock folgt der nächstgelegenen Bewegung (sanftes Tracking)
+  if (lock && motionCells.length) {
+    let best = null, bd = 0.18;
+    for (const [mx, my, mw2, mh2] of motionCells) {
+      const ccx = mx + mw2 / 2, ccy = my + mh2 / 2;
+      const dist = Math.hypot(ccx - lock.x, ccy - lock.y);
+      if (dist < bd) { bd = dist; best = [ccx, ccy]; }
+    }
+    if (best) { lock.x += (best[0] - lock.x) * 0.25; lock.y += (best[1] - lock.y) * 0.25; lock.seen = now; }
+  }
+
+  // Auto-Multi-Tracking: Bewegungscluster zu bis zu 4 Spuren verdichten
+  if (autoTrack) {
+    const clusters = [];
+    for (const [mx, my, mw2, mh2] of motionCells) {
+      const ccx = mx + mw2 / 2, ccy = my + mh2 / 2;
+      let cl = null;
+      for (const c of clusters)
+        if (Math.hypot(c.sx / c.n - ccx, c.sy / c.n - ccy) < 0.16) { cl = c; break; }
+      if (cl) { cl.sx += ccx; cl.sy += ccy; cl.n++; }
+      else clusters.push({ sx: ccx, sy: ccy, n: 1 });
+    }
+    const cents = clusters.filter(c => c.n >= 2).map(c => ({ x: c.sx / c.n, y: c.sy / c.n, used: false }));
+    for (const t of tracks) {
+      let bc = null, bdist = 0.2;
+      for (const c of cents) {
+        if (c.used) continue;
+        const dist = Math.hypot(c.x - t.x, c.y - t.y);
+        if (dist < bdist) { bdist = dist; bc = c; }
+      }
+      if (bc) {
+        bc.used = true;
+        const dx2 = bc.x - t.x, dy2 = bc.y - t.y;
+        t.vx = (t.vx || 0) * 0.8 + dx2 * 0.06;
+        t.vy = (t.vy || 0) * 0.8 + dy2 * 0.06;
+        t.x += dx2 * 0.3; t.y += dy2 * 0.3; t.seen = now;
+      }
+    }
+    for (const c of cents)
+      if (!c.used && tracks.length < 4)
+        tracks.push({ id: nextTrackId++, x: c.x, y: c.y, vx: 0, vy: 0, seen: now });
+    tracks = tracks.filter(t => now - t.seen < 1600);
+  }
+
+  // Auto-Lock: stärkstes Bewegungsareal automatisch anvisieren
+  if (autoLock && !lock && motionCells.length >= 3) {
+    let asx = 0, asy = 0;
+    for (const [mx, my, mw2, mh2] of motionCells) { asx += mx + mw2 / 2; asy += my + mh2 / 2; }
+    lock = { x: asx / motionCells.length, y: asy / motionCells.length, auto: true, seen: now };
+  }
+  if (lock && lock.auto && now - (lock.seen || 0) > 3000) lock = null;
+
+  // Session-Recording
+  if (rec) {
+    rec.frames++;
+    rec.motSum += motionCells.length;
+    const bl = motionPoints.length >> 1;
+    if (bl > rec.peak) rec.peak = bl;
+  }
+
+  // Audio-Pegel
+  if (audioAnalyser) {
+    audioAnalyser.getByteTimeDomainData(audioBuf);
+    let s2 = 0;
+    for (let i = 0; i < audioBuf.length; i++) {
+      const d2 = (audioBuf[i] - 128) / 128;
+      s2 += d2 * d2;
+    }
+    audioLevel = Math.sqrt(s2 / audioBuf.length);
+  }
+
+  // Heatmap-Trail: Bewegung glüht nach und verblasst langsam
+  if (heatOn) {
+    heatX2.globalCompositeOperation = "destination-out";
+    heatX2.fillStyle = "rgba(0,0,0,0.05)";
+    heatX2.fillRect(0, 0, heatC.width, heatC.height);
+    heatX2.globalCompositeOperation = "source-over";
+    heatX2.fillStyle = THEMES[theme].main;
+    for (let i = 0; i < motionPoints.length; i += 6)
+      heatX2.fillRect(motionPoints[i] * heatC.width - 1, motionPoints[i + 1] * heatC.height - 1, 3, 3);
+  }
+
+  // Sentry: bewaffneter Wächter-Modus
+  if (sentry && performance.now() > sentryArmAt) {
+    const trig = motionCells.length >= 2 || (audioAnalyser && audioLevel > 0.3);
+    if (trig && now - lastAlarm > 4000) {
+      lastAlarm = now;
+      alarmSound();
+      doSnap(true);
+      if (rec) rec.log.push(new Date().toTimeString().slice(0, 8) + "  SENTRY ALARM");
+    }
+  }
+
+  // ---- Filter ----
+  applyFilter(d, luma, pw, ph, now);
+
+  // ---- Render ----
+  viewX.imageSmoothingEnabled = false;
+  if (mode === "RAW") {
+    viewX.drawImage(video, vr.sx, vr.sy, vr.sw, vr.sh, 0, 0, viewC.width, viewC.height);
+  } else if (mode === "ASCII") {
+    renderAscii(luma, pw, ph);
+  } else {
+    procX.putImageData(img, 0, 0);
+    viewX.drawImage(proc, 0, 0, viewC.width, viewC.height);
+  }
+
+  if (showHud) drawHUD(now);
+  else hudX.clearRect(0, 0, innerWidth, innerHeight);
+
+  if (sentry) drawSentry(now);
+
+  // Video-REC: Frame + HUD in den Aufnahme-Canvas kopieren
+  if (vRec && recC) {
+    recX2.drawImage(viewC, 0, 0);
+    recX2.drawImage(hudC, 0, 0);
+  }
+
+  // Lern-KI: Lock-Ausschnitt regelmäßig klassifizieren
+  if (featNet && knn && lock && knn.getNumClasses() > 0 && now - learnLastRun > 1500 && !learnBusy) {
+    learnLastRun = now;
+    classifyLock();
+  }
+
+  // ---- KI-Erkennung (gedrosselt) ----
+  if (aiEnabled && aiModel && now - aiLastRun > 600) {
+    aiLastRun = now;
+    aiModel.detect(video).then(preds => {
+      const vz = vidRect();
+      const fresh = preds.filter(p => p.score > 0.5).map(p => ({
+        x: (p.bbox[0] - vz.sx) / vz.sw, y: (p.bbox[1] - vz.sy) / vz.sh,
+        w: p.bbox[2] / vz.sw, h: p.bbox[3] / vz.sh,
+        label: p.class.toUpperCase(), score: p.score
+      }));
+      // Glättung: nur stabile Erkennungen anzeigen, Positionen mitteln
+      const prevB = aiRaw;
+      aiRaw = fresh;
+      aiBoxes = fresh
+        .filter(bx => bx.score > 0.65 || prevB.some(pb => pb.label === bx.label && Math.hypot(pb.x - bx.x, pb.y - bx.y) < 0.15))
+        .map(bx => {
+          const pb = prevB.find(p2 => p2.label === bx.label && Math.hypot(p2.x - bx.x, p2.y - bx.y) < 0.15);
+          return pb ? { ...bx, x: (bx.x + pb.x) / 2, y: (bx.y + pb.y) / 2, w: (bx.w + pb.w) / 2, h: (bx.h + pb.h) / 2 } : bx;
+        });
+      if (voiceOn && aiBoxes.length && "speechSynthesis" in window && Date.now() - (window.__lastSpeak || 0) > 4000) {
+        const top = aiBoxes.reduce((a2, b2) => b2.score > a2.score ? b2 : a2);
+        if (top.label !== window.__lastSpoken || Date.now() - (window.__lastSpeak || 0) > 12000) {
+          window.__lastSpoken = top.label;
+          window.__lastSpeak = Date.now();
+          const u = new SpeechSynthesisUtterance(top.label.toLowerCase() + " erkannt, " + Math.round(top.score * 100) + " Prozent");
+          u.lang = "de-DE";
+          speechSynthesis.speak(u);
+        }
+      }
+      if (rec && aiBoxes.length) {
+        for (const bx of aiBoxes) rec.det[bx.label] = (rec.det[bx.label] || 0) + 1;
+        if (Date.now() - rec.lastLog > 2000 && rec.log.length < 80) {
+          rec.lastLog = Date.now();
+          rec.log.push(new Date().toTimeString().slice(0, 8) + "  " +
+            aiBoxes.map(bx => bx.label + " " + Math.round(bx.score * 100) + "%").join(", "));
+        }
+      }
+    }).catch(() => {});
+  }
+}
+
+/* ================= Filters ================= */
+function applyFilter(d, luma, pw, ph, now) {
+  const n = pw * ph;
+  switch (mode) {
+    case "RAW": return;
+
+    case "THERMAL":
+      for (let i = 0; i < n; i++) {
+        const v = luma[i] * 3, j = i * 4;
+        d[j] = IRON[v]; d[j+1] = IRON[v+1]; d[j+2] = IRON[v+2];
+      }
+      return;
+
+    case "NVIS":
+      for (let i = 0; i < n; i++) {
+        const j = i * 4;
+        let v = Math.min(255, Math.pow(luma[i] / 255, 0.6) * 255 + (Math.random() * 22 - 11));
+        d[j] = v * 0.15; d[j+1] = v; d[j+2] = v * 0.25;
+      }
+      return;
+
+    case "EDGE": {
+      const out = new Uint8Array(n);
+      for (let y = 1; y < ph - 1; y++) {
+        for (let x = 1; x < pw - 1; x++) {
+          const i = y * pw + x;
+          const gx = -luma[i-pw-1] - 2*luma[i-1] - luma[i+pw-1] + luma[i-pw+1] + 2*luma[i+1] + luma[i+pw+1];
+          const gy = -luma[i-pw-1] - 2*luma[i-pw] - luma[i-pw+1] + luma[i+pw-1] + 2*luma[i+pw] + luma[i+pw+1];
+          out[i] = Math.min(255, (Math.abs(gx) + Math.abs(gy)) >> 1);
+        }
+      }
+      for (let i = 0; i < n; i++) {
+        const j = i * 4, e = out[i] > 40 ? out[i] : 0;
+        d[j] = e; d[j+1] = e * 0.69; d[j+2] = 0;   // Amber-Linien
+      }
+      return;
+    }
+
+    case "SONAR": {
+      // Aktive Bewegungszellen als Maske
+      const rows = Math.round(GRID * ph / pw);
+      const mask = new Uint8Array(GRID * rows);
+      for (const [mx, my] of motionCells)
+        mask[Math.round(my * rows) * GRID + Math.round(mx * GRID)] = 1;
+      const cellW = pw / GRID, cellH = ph / rows;
+      for (let y = 0; y < ph; y++) {
+        const cy = Math.min(rows - 1, (y / cellH) | 0);
+        for (let x = 0; x < pw; x++) {
+          const i = y * pw + x, j = i * 4;
+          const hot = mask[cy * GRID + Math.min(GRID - 1, (x / cellW) | 0)];
+          const v = luma[i];
+          if (hot) { d[j] = v * 0.2; d[j+1] = Math.min(255, v * 1.4 + 60); d[j+2] = 255; }
+          else     { d[j] = 0;       d[j+1] = v * 0.16;                    d[j+2] = v * 0.38 + 10; }
+        }
+      }
+      return;
+    }
+
+    case "PSX":
+      for (let i = 0; i < n; i++) {
+        const j = i * 4;
+        const b = (BAYER[(i & 3) + (((i / pw) | 0) & 3) * 4] - 8) * 2;
+        d[j]   = Math.max(0, Math.min(255, ((d[j]   + b) >> 5) << 5)) + 12;
+        d[j+1] = Math.max(0, Math.min(255, ((d[j+1] + b) >> 5) << 5)) + 12;
+        d[j+2] = Math.max(0, Math.min(255, ((d[j+2] + b) >> 5) << 5)) + 12;
+      }
+      return;
+  }
+}
+
+/* ================= HUD ================= */
+function drawHUD(now) {
+  const W = innerWidth, H = innerHeight;
+  hudX.clearRect(0, 0, W, H);
+  const alert = now < motionAlertUntil;
+  const T = THEMES[theme];
+  const col = alert ? "#FF2A2A" : T.main;
+  if (heatOn) {
+    hudX.globalAlpha = 0.5;
+    hudX.drawImage(heatC, 0, 0, W, H);
+    hudX.globalAlpha = 1;
+  }
+  hudX.font = "10px ui-monospace, Menlo, monospace";
+  hudX.lineWidth = 1;
+
+  // Eck-Klammern (atmen leicht)
+  const b = 26 + Math.sin(now / 600) * 2, m = 14, topM = m + (parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--safe-t")) || 0);
+  hudX.strokeStyle = col;
+  for (const [x, y, sx, sy] of [[m,topM,1,1],[W-m,topM,-1,1],[m,H-m,1,-1],[W-m,H-m,-1,-1]]) {
+    hudX.beginPath();
+    hudX.moveTo(x, y + sy * b); hudX.lineTo(x, y); hudX.lineTo(x + sx * b, y);
+    hudX.stroke();
+  }
+
+  // Fadenkreuz
+  const cx = W / 2, cy = H / 2, r = 34;
+  hudX.beginPath();
+  hudX.arc(cx, cy, r, 0, Math.PI * 2);
+  hudX.moveTo(cx - r - 12, cy); hudX.lineTo(cx - r + 8, cy);
+  hudX.moveTo(cx + r - 8, cy);  hudX.lineTo(cx + r + 12, cy);
+  hudX.moveTo(cx, cy - r - 12); hudX.lineTo(cx, cy - r + 8);
+  hudX.moveTo(cx, cy + r - 8);  hudX.lineTo(cx, cy + r + 12);
+  hudX.globalAlpha = 0.75; hudX.stroke(); hudX.globalAlpha = 1;
+
+  // Sonar-Sweep
+  if (mode === "SONAR") {
+    const ang = (now / 1400) % (Math.PI * 2);
+    const R = Math.hypot(W, H) / 2;
+    const g = hudX.createLinearGradient(cx, cy, cx + Math.cos(ang) * R, cy + Math.sin(ang) * R);
+    g.addColorStop(0, "rgba(53,224,255,0.35)"); g.addColorStop(1, "rgba(53,224,255,0)");
+    hudX.strokeStyle = g; hudX.lineWidth = 2;
+    hudX.beginPath(); hudX.moveTo(cx, cy);
+    hudX.lineTo(cx + Math.cos(ang) * R, cy + Math.sin(ang) * R); hudX.stroke();
+    hudX.lineWidth = 1;
+  }
+
+  // Bewegungsboxen
+  hudX.strokeStyle = alert ? "#FF2A2A" : T.main;
+  hudX.globalAlpha = 0.85;
+  for (const [x, y, w, h] of motionCells) {
+    const px = x * W, py = y * H, pw2 = w * W, ph2 = h * H, c = 7;
+    hudX.beginPath();
+    hudX.moveTo(px, py + c); hudX.lineTo(px, py); hudX.lineTo(px + c, py);
+    hudX.moveTo(px + pw2 - c, py); hudX.lineTo(px + pw2, py); hudX.lineTo(px + pw2, py + c);
+    hudX.moveTo(px + pw2, py + ph2 - c); hudX.lineTo(px + pw2, py + ph2); hudX.lineTo(px + pw2 - c, py + ph2);
+    hudX.moveTo(px + c, py + ph2); hudX.lineTo(px, py + ph2); hudX.lineTo(px, py + ph2 - c);
+    hudX.stroke();
+  }
+
+  // Bewegungs-Blips
+  if (showBlips) {
+    hudX.fillStyle = alert ? "rgba(255,70,70,0.9)" : T.blip;
+    for (let i = 0; i < motionPoints.length; i += 2)
+      hudX.fillRect(motionPoints[i] * W - 1, motionPoints[i + 1] * H - 1, 2, 2);
+  }
+  const vr = video.videoWidth ? vidRect() : null;
+
+  hudX.globalAlpha = 1;
+
+  // Ziel-Lock + Live-Zoom-Fenster
+  if (lock) {
+    const lx = lock.x * W, ly = lock.y * H;
+    hudX.strokeStyle = "#35E0FF";
+    hudX.strokeRect(lx - 22, ly - 22, 44, 44);
+    hudX.beginPath();
+    hudX.moveTo(lx - 32, ly); hudX.lineTo(lx - 14, ly);
+    hudX.moveTo(lx + 14, ly); hudX.lineTo(lx + 32, ly);
+    hudX.moveTo(lx, ly - 32); hudX.lineTo(lx, ly - 14);
+    hudX.moveTo(lx, ly + 14); hudX.lineTo(lx, ly + 32);
+    hudX.stroke();
+    hudX.fillStyle = "#35E0FF";
+    hudX.textAlign = "center";
+    hudX.fillText("LOCKED // TAP = UNLOCK", Math.max(95, Math.min(lx, W - 95)), ly + 46);
+    if (learnedLabel && performance.now() - learnedAt < 2200)
+      hudX.fillText("ID // " + learnedLabel, Math.max(95, Math.min(lx, W - 95)), ly + 60);
+    hudX.textAlign = "left";
+
+    if (vr) {
+      const pipW = Math.min(170, W * 0.42), pipH = pipW * 0.75;
+      const px = W - pipW - m, py = topM + b + 56;
+      const zoom = 3;
+      const sw = vr.sw / zoom, sh = vr.sh / zoom;
+      const sx = Math.max(0, Math.min(video.videoWidth - sw, vr.sx + lock.x * vr.sw - sw / 2));
+      const sy = Math.max(0, Math.min(video.videoHeight - sh, vr.sy + lock.y * vr.sh - sh / 2));
+      hudX.drawImage(video, sx, sy, sw, sh, px, py, pipW, pipH);
+      hudX.strokeStyle = "#35E0FF";
+      hudX.strokeRect(px, py, pipW, pipH);
+      hudX.beginPath();
+      hudX.moveTo(px + pipW / 2 - 10, py + pipH / 2); hudX.lineTo(px + pipW / 2 + 10, py + pipH / 2);
+      hudX.moveTo(px + pipW / 2, py + pipH / 2 - 10); hudX.lineTo(px + pipW / 2, py + pipH / 2 + 10);
+      hudX.stroke();
+      hudX.fillStyle = "#35E0FF";
+      hudX.fillText("LIVE CROP 3.0x  X" + Math.round(lock.x * 999) + " Y" + Math.round(lock.y * 999), px, py + pipH + 12);
+      hudX.globalAlpha = 0.45;
+      hudX.beginPath(); hudX.moveTo(lx, ly); hudX.lineTo(px, py + pipH); hudX.stroke();
+      hudX.globalAlpha = 1;
+    }
+  }
+
+  // Auto-Track-Fenster
+  if (tracks.length && vr) {
+    const tw = Math.min(132, W * 0.36), th = tw * 0.75;
+    const slots = [
+      [m, topM + b + 84],
+      [m, topM + b + 84 + th + 36],
+      [W - tw - m, H * 0.44],
+      [m, H * 0.58]
+    ];
+    hudX.save();
+    tracks.forEach((t, i) => {
+      const colT = i % 2 ? "#FF5A5A" : T.main;
+      const tx = t.x * W, ty = t.y * H;
+      const name = "TRACK-" + String(t.id % 100).padStart(2, "0");
+      hudX.strokeStyle = colT; hudX.fillStyle = colT;
+      hudX.beginPath(); hudX.arc(tx, ty, 13, 0, Math.PI * 2); hudX.stroke();
+      hudX.strokeRect(tx - 19, ty - 19, 38, 38);
+      hudX.fillText(name, tx + 22, ty - 22);
+
+      // Vektor-Prognose: Richtungspfeil + gestrichelte Vorhersage
+      if (vecOn && (Math.abs(t.vx) + Math.abs(t.vy)) > 0.0005) {
+        const exx = tx + t.vx * 50 * W, eyy = ty + t.vy * 50 * H;
+        hudX.beginPath(); hudX.moveTo(tx, ty); hudX.lineTo(exx, eyy); hudX.stroke();
+        const ang2 = Math.atan2(eyy - ty, exx - tx);
+        hudX.beginPath();
+        hudX.moveTo(exx, eyy);
+        hudX.lineTo(exx - 8 * Math.cos(ang2 - 0.4), eyy - 8 * Math.sin(ang2 - 0.4));
+        hudX.moveTo(exx, eyy);
+        hudX.lineTo(exx - 8 * Math.cos(ang2 + 0.4), eyy - 8 * Math.sin(ang2 + 0.4));
+        hudX.stroke();
+        hudX.setLineDash([3, 7]);
+        hudX.beginPath();
+        hudX.moveTo(exx, eyy);
+        hudX.lineTo(tx + t.vx * 130 * W, ty + t.vy * 130 * H);
+        hudX.stroke();
+        hudX.setLineDash([]);
+      }
+
+      const [px, py] = slots[i];
+      const zoom = 2.5;
+      const sw = vr.sw / zoom, sh = vr.sh / zoom;
+      const sx = Math.max(0, Math.min(video.videoWidth - sw, vr.sx + t.x * vr.sw - sw / 2));
+      const sy = Math.max(0, Math.min(video.videoHeight - sh, vr.sy + t.y * vr.sh - sh / 2));
+      hudX.drawImage(video, sx, sy, sw, sh, px, py, tw, th);
+      hudX.strokeRect(px, py, tw, th);
+      hudX.beginPath();
+      hudX.moveTo(px + tw / 2 - 8, py + th / 2); hudX.lineTo(px + tw / 2 + 8, py + th / 2);
+      hudX.moveTo(px + tw / 2, py + th / 2 - 8); hudX.lineTo(px + tw / 2, py + th / 2 + 8);
+      hudX.stroke();
+      hudX.fillText("AUTO TRACK // " + name, px, py - 5);
+      hudX.fillText("X" + Math.round(t.x * 999) + " Y" + Math.round(t.y * 999) + "  Z:2.5x", px, py + th + 12);
+      hudX.globalAlpha = 0.4;
+      hudX.beginPath(); hudX.moveTo(tx, ty); hudX.lineTo(px + tw / 2, py + th / 2); hudX.stroke();
+      hudX.globalAlpha = 1;
+    });
+    hudX.restore();
+  }
+
+  // Radar-Widget
+  if (showRadar) {
+  const rr = 40, rcx = W - m - rr - 6, rcy = H - rr - 155;
+  hudX.fillStyle = "rgba(0,0,0,0.5)";
+  hudX.strokeStyle = alert ? "#FF2A2A" : T.main;
+  hudX.beginPath(); hudX.arc(rcx, rcy, rr, 0, Math.PI * 2); hudX.fill(); hudX.stroke();
+  hudX.globalAlpha = 0.35;
+  hudX.beginPath(); hudX.arc(rcx, rcy, rr * 0.66, 0, Math.PI * 2); hudX.stroke();
+  hudX.beginPath(); hudX.arc(rcx, rcy, rr * 0.33, 0, Math.PI * 2); hudX.stroke();
+  hudX.globalAlpha = 1;
+  const ra = (now / 900) % (Math.PI * 2);
+  hudX.beginPath(); hudX.moveTo(rcx, rcy);
+  hudX.lineTo(rcx + Math.cos(ra) * rr, rcy + Math.sin(ra) * rr); hudX.stroke();
+  hudX.save();
+  hudX.beginPath(); hudX.arc(rcx, rcy, rr - 2, 0, Math.PI * 2); hudX.clip();
+  hudX.fillStyle = alert ? "#FF2A2A" : T.main;
+  for (let i = 0; i < motionPoints.length; i += 14)
+    hudX.fillRect(rcx - rr + motionPoints[i] * rr * 2 - 1, rcy - rr + motionPoints[i + 1] * rr * 2 - 1, 2, 2);
+  hudX.restore();
+  hudX.fillStyle = alert ? "#FF2A2A" : T.main;
+  hudX.fillText("RADAR", rcx - rr, rcy - rr - 8);
+  hudX.fillText("BLIPS " + (motionPoints.length >> 1), rcx - rr, rcy + rr + 14);
+  }
+
+  // KI-Boxen
+  if (aiEnabled) {
+    hudX.strokeStyle = "#35E0FF"; hudX.fillStyle = "#35E0FF";
+    for (const bx of aiBoxes) {
+      const px = bx.x * W, py = bx.y * H;
+      hudX.strokeRect(px, py, bx.w * W, bx.h * H);
+      hudX.fillText("DET // " + bx.label + " " + Math.round(bx.score * 100) + "%", px + 3, py - 4);
+    }
+  }
+
+  // Statuszeilen
+  hudX.fillStyle = col;
+  const t = new Date();
+  const clock = [t.getHours(), t.getMinutes(), t.getSeconds()].map(v => String(v).padStart(2, "0")).join(":");
+  hudX.fillText("MODE/" + mode + (digitalZoom > 1 ? "  ZOOM " + digitalZoom.toFixed(1) + "x" : ""), m + 4, topM + b + 16);
+  hudX.fillText(clock + "  FPS/" + fps, m + 4, topM + b + 30);
+  if (rec) {
+    hudX.fillStyle = "#FF2A2A";
+    hudX.fillText("\u25CF REC " + Math.round((Date.now() - rec.start) / 1000) + "s", m + 4, topM + b + 44);
+    hudX.fillStyle = col;
+  }
+  const hd = heading != null ? "HDG " + String(Math.round(heading)).padStart(3, "0") + "°" : "HDG ---";
+  hudX.textAlign = "right";
+  hudX.fillText(hd, W - m - 4, topM + b + 16);
+  hudX.fillText("MOT " + String(Math.min(99, Math.round(motionLevel * 400))).padStart(2, "0") + "%", W - m - 4, topM + b + 30);
+  const pr = (pitch != null)
+    ? "PIT " + pitch.toFixed(0) + "\u00B0  ROL " + roll.toFixed(0) + "\u00B0"
+    : "PIT ---  ROL ---";
+  hudX.fillText(pr, W - m - 4, topM + b + 44);
+  hudX.textAlign = "left";
+  const geo = gps ? gps.latitude.toFixed(5) + " / " + gps.longitude.toFixed(5) + "  ±" + Math.round(gps.accuracy) + "m" : "GEO UPLINK: NO FIX";
+  hudX.fillText(geo, m + 4, H - m - b - 78);
+
+  // Audio-Pegel
+  if (audioAnalyser) {
+    hudX.strokeStyle = col; hudX.fillStyle = col;
+    hudX.strokeRect(m + 4, H - m - b - 70, 90, 6);
+    hudX.fillRect(m + 4, H - m - b - 70, 90 * Math.min(1, audioLevel * 3), 6);
+    hudX.fillText("AUD SIG", m + 102, H - m - b - 63);
+  }
+
+  // Künstlicher Horizont (gyro-stabilisiert)
+  if (horizonOn && roll != null && pitch != null) {
+    hudX.save();
+    hudX.translate(cx, cy);
+    hudX.rotate(-roll * Math.PI / 180);
+    const off = Math.max(-140, Math.min(140, (pitch - 90) * 4));
+    hudX.strokeStyle = col;
+    hudX.globalAlpha = 0.6;
+    hudX.beginPath();
+    hudX.moveTo(-W * 0.3, off); hudX.lineTo(-46, off);
+    hudX.moveTo(46, off); hudX.lineTo(W * 0.3, off);
+    for (const st of [-2, -1, 1, 2]) {
+      const yy = off + st * 42;
+      hudX.moveTo(-72, yy); hudX.lineTo(-34, yy);
+      hudX.moveTo(34, yy); hudX.lineTo(72, yy);
+    }
+    hudX.stroke();
+    hudX.restore();
+    hudX.globalAlpha = 1;
+  }
+
+  if (alert) {
+    hudX.textAlign = "center";
+    hudX.font = "bold 13px ui-monospace, Menlo, monospace";
+    hudX.fillText("\u25B2 MOVEMENT DETECTED \u25B2", cx, topM + b + 24);
+    hudX.textAlign = "left";
+  }
+}
+
+function drawSentry(now) {
+  const W = innerWidth, H = innerHeight;
+  const armed = performance.now() > sentryArmAt;
+  const alarm = now - lastAlarm < 2500;
+  hudX.textAlign = "center";
+  hudX.font = "bold 15px ui-monospace, Menlo, monospace";
+  hudX.fillStyle = alarm ? "#FF2A2A" : THEMES[theme].main;
+  hudX.fillText(
+    alarm ? "\u25B2 SENTRY // ALARM \u25B2"
+      : armed ? "SENTRY ARMED"
+      : "SENTRY ARMING " + Math.max(0, Math.ceil((sentryArmAt - performance.now()) / 1000)),
+    W / 2, H / 2 - 60
+  );
+  hudX.font = "10px ui-monospace, Menlo, monospace";
+  hudX.fillText("TAP = DISARM  //  AUTO-SNAP AKTIV", W / 2, H / 2 - 40);
+  hudX.textAlign = "left";
+}
+
+if ("serviceWorker" in navigator && location.protocol === "https:")
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && running) { prevLuma = null; }
+});
+</script>
+</body>
+</html>
