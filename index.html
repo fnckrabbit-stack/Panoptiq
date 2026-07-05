@@ -176,6 +176,8 @@
   </div>
   <div class="tlabel">DIGITAL CAMERA ZOOM: <span id="zoomVal">1.0x</span></div>
   <input class="tslider" id="zoomSl" type="range" min="10" max="50" value="10">
+  <div class="tlabel">MOTION SENSITIVITY &mdash; LOWER DETECTS MORE: <span id="diffVal">26</span></div>
+  <input class="tslider" id="diffSl" type="range" min="8" max="70" value="26">
   <div class="tlabel">MOTION ARRAY DENSITY &mdash; MAX POINTS: <span id="densVal">2400</span></div>
   <input class="tslider" id="densSl" type="range" min="200" max="6000" step="100" value="2400">
   <button id="toolsClose" class="chip" style="margin-top:26px;width:100%;padding:14px;">TOOLS CLOSE</button>
@@ -239,7 +241,7 @@ const proc  = document.createElement("canvas");
 const procX = proc.getContext("2d", { willReadFrequently: true });
 
 const GRID = 10;               // motion grid columns
-const DIFF_T = 26;             // per-pixel luma diff threshold
+let diffT = 26;                // Pixel-Schwellwert: niedriger = empfindlicher
 
 /* ================= Boot sequence ================= */
 const bootLines = [
@@ -373,6 +375,10 @@ document.getElementById("densSl").addEventListener("input", e => {
   blipMax = +e.target.value;
   document.getElementById("densVal").textContent = blipMax;
 });
+document.getElementById("diffSl").addEventListener("input", e => {
+  diffT = +e.target.value;
+  document.getElementById("diffVal").textContent = diffT;
+});
 
 document.getElementById("camSwitch").addEventListener("click", async () => {
   if (!running) return;
@@ -505,7 +511,7 @@ aiBtn.addEventListener("click", async () => {
     try {
       await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js");
       await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js");
-      aiModel = await cocoSsd.load({ base: "mobilenet_v2" });
+      aiModel = await cocoSsd.load({ base: "lite_mobilenet_v2" });
     } catch (e) {
       aiBtn.textContent = "AI: FAILED"; aiLoading = false; return;
     }
@@ -778,7 +784,7 @@ function loop(now) {
       const cy = Math.min(rows - 1, (y / cellH) | 0);
       for (let x = 0; x < pw; x++) {
         const i = y * pw + x;
-        if (Math.abs(luma[i] - prevLuma[i]) > DIFF_T) {
+        if (Math.abs(luma[i] - prevLuma[i]) > diffT) {
           cellHits[cy * GRID + Math.min(GRID - 1, (x / cellW) | 0)]++;
           if ((hits % 4) === 0 && motionPoints.length < blipMax)
             motionPoints.push(x / pw, y / ph);
@@ -930,15 +936,13 @@ function loop(now) {
         w: p.bbox[2] / vz.sw, h: p.bbox[3] / vz.sh,
         label: p.class.toUpperCase(), score: p.score
       }));
-      // Glättung: nur stabile Erkennungen anzeigen, Positionen mitteln
+      // Glättung: alle Erkennungen zeigen, gematchte Positionen nur beruhigen
       const prevB = aiRaw;
       aiRaw = fresh;
-      aiBoxes = fresh
-        .filter(bx => bx.score > 0.65 || prevB.some(pb => pb.label === bx.label && Math.hypot(pb.x - bx.x, pb.y - bx.y) < 0.15))
-        .map(bx => {
-          const pb = prevB.find(p2 => p2.label === bx.label && Math.hypot(p2.x - bx.x, p2.y - bx.y) < 0.15);
-          return pb ? { ...bx, x: (bx.x + pb.x) / 2, y: (bx.y + pb.y) / 2, w: (bx.w + pb.w) / 2, h: (bx.h + pb.h) / 2 } : bx;
-        });
+      aiBoxes = fresh.map(bx => {
+        const pb = prevB.find(p2 => p2.label === bx.label && Math.hypot(p2.x - bx.x, p2.y - bx.y) < 0.15);
+        return pb ? { ...bx, x: (bx.x + pb.x) / 2, y: (bx.y + pb.y) / 2, w: (bx.w + pb.w) / 2, h: (bx.h + pb.h) / 2 } : bx;
+      });
       if (voiceOn && aiBoxes.length && "speechSynthesis" in window && Date.now() - (window.__lastSpeak || 0) > 4000) {
         const top = aiBoxes.reduce((a2, b2) => b2.score > a2.score ? b2 : a2);
         if (top.label !== window.__lastSpoken || Date.now() - (window.__lastSpeak || 0) > 12000) {
