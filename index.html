@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#050505">
+<title>PANOPTIQ // Personal Build</title>
+<style>
+  :root {
+    --amber: #FFB000;
+    --amber-dim: #8A6200;
+    --amber-ghost: rgba(255,176,0,0.14);
+    --alert: #FF2A2A;
+    --cyan: #35E0FF;
+    --bg: #050505;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-t: env(safe-area-inset-top, 0px);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; background:var(--bg); }
+  body {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--amber);
+    user-select: none; -webkit-user-select: none;
+  }
+  #stage { position:fixed; inset:0; background:#000; }
+  #cam { display:none; }
+  #view, #hud { position:absolute; inset:0; width:100%; height:100%; }
+  #view { image-rendering: pixelated; }
+
+  /* ---------- Boot screen ---------- */
+  #boot {
+    position:fixed; inset:0; background:var(--bg); z-index:50;
+    display:flex; flex-direction:column; justify-content:center; align-items:center;
+    padding: 24px; gap: 28px;
+  }
+  #boot h1 {
+    font-size: 26px; letter-spacing: 0.42em; font-weight: 700;
+    color: var(--amber); text-shadow: 0 0 18px rgba(255,176,0,0.5);
+  }
+  #boot h1 span { color: var(--amber-dim); }
+  #bootlog {
+    width: min(360px, 86vw); height: 150px; overflow:hidden;
+    font-size: 11px; line-height: 1.7; color: var(--amber-dim);
+    border-left: 1px solid var(--amber-dim); padding-left: 12px;
+  }
+  #bootlog .ok { color: var(--amber); }
+  #initBtn {
+    font-family: inherit; font-size: 14px; letter-spacing: 0.3em;
+    color: var(--bg); background: var(--amber);
+    border: none; padding: 16px 42px; cursor: pointer;
+    box-shadow: 0 0 24px rgba(255,176,0,0.35);
+    opacity: 0; transition: opacity .4s;
+  }
+  #initBtn.ready { opacity: 1; }
+  #bootErr { color: var(--alert); font-size: 11px; max-width: 320px; text-align:center; line-height:1.6; }
+
+  /* ---------- Controls ---------- */
+  #controls {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    padding: 10px 12px calc(12px + var(--safe-b));
+    background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0));
+    display: none; flex-direction: column; gap: 10px;
+  }
+  #modes { display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; }
+  #modes::-webkit-scrollbar { display:none; }
+  .chip {
+    font-family: inherit; font-size: 11px; letter-spacing: 0.18em;
+    padding: 9px 14px; white-space: nowrap; cursor: pointer;
+    color: var(--amber-dim); background: rgba(0,0,0,0.55);
+    border: 1px solid var(--amber-dim); border-radius: 2px;
+  }
+  .chip.active { color: var(--bg); background: var(--amber); border-color: var(--amber); }
+  .chip.ai-on { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
+  #subrow { display:flex; align-items:center; gap:12px; font-size:10px; letter-spacing:0.15em; color:var(--amber-dim); }
+  #sens { flex:1; accent-color: var(--amber); height: 22px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="boot">
+  <h1>PANOPTIQ<span>_04</span></h1>
+  <div id="bootlog"></div>
+  <button id="initBtn">INITIALIZE</button>
+  <div id="bootErr"></div>
+</div>
+
+<div id="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="view"></canvas>
+  <canvas id="hud"></canvas>
+</div>
+
+<div id="controls">
+  <div id="modes"></div>
+  <div id="subrow">
+    <span>SENS</span>
+    <input id="sens" type="range" min="1" max="10" value="5">
+    <button id="aiBtn" class="chip">AI: OFF</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ================= State ================= */
+const MODES = ["RAW","EDGE","THERMAL","NVIS","SONAR","PSX"];
+let mode = "RAW";
+let sensitivity = 5;
+let aiEnabled = false, aiModel = null, aiLoading = false, aiBoxes = [], aiLastRun = 0;
+let gps = null, heading = null;
+let motionLevel = 0, motionCells = [], motionAlertUntil = 0, motionPoints = [];
+let lock = null, pitch = null, roll = null;
+let prevLuma = null, prevW = 0;
+let fps = 0, frames = 0, fpsLast = performance.now();
+let running = false;
+
+const video = document.getElementById("cam");
+const viewC = document.getElementById("view");
+const hudC  = document.getElementById("hud");
+const viewX = viewC.getContext("2d");
+const hudX  = hudC.getContext("2d");
+const proc  = document.createElement("canvas");
+const procX = proc.getContext("2d", { willReadFrequently: true });
+
+const GRID = 10;               // motion grid columns
+const DIFF_T = 26;             // per-pixel luma diff threshold
+
+/* ================= Boot sequence ================= */
+const bootLines = [
+  "loading kernel .............. [ok]",
+  "optic pipeline .............. [ok]",
+  "motion diff engine .......... [ok]",
+  "render modes x6 ............. [ok]",
+  "geo uplink .................. [standby]",
+  "neural module ............... [standby]",
+  "awaiting operator input _"
+];
+const logEl = document.getElementById("bootlog");
+const initBtn = document.getElementById("initBtn");
+let li = 0;
+(function typeLog(){
+  if (li < bootLines.length) {
+    const d = document.createElement("div");
+    d.textContent = bootLines[li];
+    if (bootLines[li].includes("[ok]")) d.className = "ok";
+    logEl.appendChild(d);
+    li++;
+    setTimeout(typeLog, 150);
+  } else {
+    initBtn.classList.add("ready");
+  }
+})();
+
+initBtn.addEventListener("click", start);
+
+async function start() {
+  initBtn.disabled = true;
+  try {
+    // iOS: Kompass-Berechtigung muss aus einer User-Geste heraus angefragt werden
+    if (typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function") {
+      try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
+    }
+    window.addEventListener("deviceorientation", e => {
+      if (typeof e.webkitCompassHeading === "number") heading = e.webkitCompassHeading;
+      else if (e.alpha != null) heading = (360 - e.alpha) % 360;
+      if (e.beta != null) pitch = e.beta;
+      if (e.gamma != null) roll = e.gamma;
+    });
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment", width: { ideal: 1280 } },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(
+        p => { gps = p.coords; },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 5000 }
+      );
+    }
+
+    document.getElementById("boot").style.display = "none";
+    document.getElementById("controls").style.display = "flex";
+    resize();
+    running = true;
+    requestAnimationFrame(loop);
+  } catch (err) {
+    initBtn.disabled = false;
+    document.getElementById("bootErr").textContent =
+      "CAMERA ACCESS DENIED — Seite muss über HTTPS laufen und Kamerazugriff braucht deine Zustimmung. (" + err.name + ")";
+  }
+}
+
+/* ================= UI ================= */
+const modesEl = document.getElementById("modes");
+MODES.forEach(m => {
+  const b = document.createElement("button");
+  b.className = "chip" + (m === mode ? " active" : "");
+  b.textContent = m;
+  b.addEventListener("click", () => {
+    mode = m;
+    prevLuma = null; // Grid-Reset bei Auflösungswechsel
+    document.querySelectorAll("#modes .chip").forEach(c => c.classList.toggle("active", c.textContent === m));
+  });
+  modesEl.appendChild(b);
+});
+
+document.getElementById("sens").addEventListener("input", e => sensitivity = +e.target.value);
+
+const aiBtn = document.getElementById("aiBtn");
+aiBtn.addEventListener("click", async () => {
+  if (aiLoading) return;
+  if (aiEnabled) {
+    aiEnabled = false; aiBoxes = [];
+    aiBtn.textContent = "AI: OFF"; aiBtn.classList.remove("ai-on");
+    return;
+  }
+  if (!aiModel) {
+    aiLoading = true; aiBtn.textContent = "AI: LOADING…";
+    try {
+      await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js");
+      await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js");
+      aiModel = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+    } catch (e) {
+      aiBtn.textContent = "AI: FAILED"; aiLoading = false; return;
+    }
+    aiLoading = false;
+  }
+  aiEnabled = true;
+  aiBtn.textContent = "AI: ON"; aiBtn.classList.add("ai-on");
+});
+
+/* Tap-to-Lock: Antippen setzt ein Ziel, erneutes Antippen in der Nähe löst es */
+document.getElementById("stage").addEventListener("pointerdown", e => {
+  if (!running) return;
+  const x = e.clientX / innerWidth, y = e.clientY / innerHeight;
+  if (lock && Math.hypot(x - lock.x, y - lock.y) < 0.12) { lock = null; return; }
+  lock = { x, y };
+});
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
+/* ================= Sizing ================= */
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  for (const c of [viewC, hudC]) {
+    c.width  = Math.round(innerWidth * dpr);
+    c.height = Math.round(innerHeight * dpr);
+  }
+  hudX.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener("resize", resize);
+
+/* ================= Thermal LUT ================= */
+const IRON = (() => {
+  const stops = [[0,0,0],[40,0,80],[130,0,130],[210,45,20],[255,130,0],[255,225,60],[255,255,255]];
+  const lut = new Uint8Array(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255 * (stops.length - 1);
+    const a = stops[Math.floor(t)], b = stops[Math.min(Math.ceil(t), stops.length - 1)];
+    const f = t - Math.floor(t);
+    for (let k = 0; k < 3; k++) lut[i*3+k] = a[k] + (b[k] - a[k]) * f;
+  }
+  return lut;
+})();
+const BAYER = [0,8,2,10, 12,4,14,6, 3,11,1,9, 15,7,13,5];
+
+/* ================= Main loop ================= */
+function loop(now) {
+  if (!running) return;
+  requestAnimationFrame(loop);
+  if (video.readyState < 2) return;
+
+  frames++;
+  if (now - fpsLast > 500) { fps = Math.round(frames * 1000 / (now - fpsLast)); frames = 0; fpsLast = now; }
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw) return;
+
+  // Verarbeitungsauflösung je Modus
+  const pw = (mode === "PSX") ? 160 : 240;
+  const ph = Math.round(pw * vh / vw);
+  if (proc.width !== pw || proc.height !== ph) { proc.width = pw; proc.height = ph; prevLuma = null; }
+
+  procX.drawImage(video, 0, 0, pw, ph);
+  const img = procX.getImageData(0, 0, pw, ph);
+  const d = img.data;
+
+  // ---- Luma + Motion-Diff auf Rasterzellen ----
+  const n = pw * ph;
+  const luma = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const j = i * 4;
+    luma[i] = (d[j] * 77 + d[j+1] * 150 + d[j+2] * 29) >> 8;
+  }
+  const rows = Math.round(GRID * ph / pw);
+  const cellW = pw / GRID, cellH = ph / rows;
+  const cellHits = new Uint16Array(GRID * rows);
+  let hits = 0;
+  motionPoints = [];
+  if (prevLuma && prevW === pw) {
+    for (let y = 0; y < ph; y++) {
+      const cy = Math.min(rows - 1, (y / cellH) | 0);
+      for (let x = 0; x < pw; x++) {
+        const i = y * pw + x;
+        if (Math.abs(luma[i] - prevLuma[i]) > DIFF_T) {
+          cellHits[cy * GRID + Math.min(GRID - 1, (x / cellW) | 0)]++;
+          if ((hits % 4) === 0 && motionPoints.length < 2400)
+            motionPoints.push(x / pw, y / ph);
+          hits++;
+        }
+      }
+    }
+  }
+  prevLuma = luma; prevW = pw;
+  motionLevel = hits / n;
+  const cellMin = cellW * cellH * (0.32 - sensitivity * 0.026); // Sens 1 → träge, 10 → nervös
+  motionCells = [];
+  for (let cy = 0; cy < rows; cy++)
+    for (let cx = 0; cx < GRID; cx++)
+      if (cellHits[cy * GRID + cx] > cellMin) motionCells.push([cx / GRID, cy / rows, 1 / GRID, 1 / rows]);
+  if (motionCells.length > 0) motionAlertUntil = now + 900;
+
+  // Lock folgt der nächstgelegenen Bewegung (sanftes Tracking)
+  if (lock && motionCells.length) {
+    let best = null, bd = 0.18;
+    for (const [mx, my, mw2, mh2] of motionCells) {
+      const ccx = mx + mw2 / 2, ccy = my + mh2 / 2;
+      const dist = Math.hypot(ccx - lock.x, ccy - lock.y);
+      if (dist < bd) { bd = dist; best = [ccx, ccy]; }
+    }
+    if (best) { lock.x += (best[0] - lock.x) * 0.25; lock.y += (best[1] - lock.y) * 0.25; }
+  }
+
+  // ---- Filter ----
+  applyFilter(d, luma, pw, ph, now);
+
+  // ---- Render ----
+  viewX.imageSmoothingEnabled = false;
+  if (mode === "RAW") {
+    viewX.drawImage(video, 0, 0, viewC.width, viewC.height);
+  } else {
+    procX.putImageData(img, 0, 0);
+    viewX.drawImage(proc, 0, 0, viewC.width, viewC.height);
+  }
+
+  drawHUD(now);
+
+  // ---- KI-Erkennung (gedrosselt) ----
+  if (aiEnabled && aiModel && now - aiLastRun > 600) {
+    aiLastRun = now;
+    aiModel.detect(video).then(preds => {
+      aiBoxes = preds.filter(p => p.score > 0.5).map(p => ({
+        x: p.bbox[0] / vw, y: p.bbox[1] / vh, w: p.bbox[2] / vw, h: p.bbox[3] / vh,
+        label: p.class.toUpperCase(), score: p.score
+      }));
+    }).catch(() => {});
+  }
+}
+
+/* ================= Filters ================= */
+function applyFilter(d, luma, pw, ph, now) {
+  const n = pw * ph;
+  switch (mode) {
+    case "RAW": return;
+
+    case "THERMAL":
+      for (let i = 0; i < n; i++) {
+        const v = luma[i] * 3, j = i * 4;
+        d[j] = IRON[v]; d[j+1] = IRON[v+1]; d[j+2] = IRON[v+2];
+      }
+      return;
+
+    case "NVIS":
+      for (let i = 0; i < n; i++) {
+        const j = i * 4;
+        let v = Math.min(255, Math.pow(luma[i] / 255, 0.6) * 255 + (Math.random() * 22 - 11));
+        d[j] = v * 0.15; d[j+1] = v; d[j+2] = v * 0.25;
+      }
+      return;
+
+    case "EDGE": {
+      const out = new Uint8Array(n);
+      for (let y = 1; y < ph - 1; y++) {
+        for (let x = 1; x < pw - 1; x++) {
+          const i = y * pw + x;
+          const gx = -luma[i-pw-1] - 2*luma[i-1] - luma[i+pw-1] + luma[i-pw+1] + 2*luma[i+1] + luma[i+pw+1];
+          const gy = -luma[i-pw-1] - 2*luma[i-pw] - luma[i-pw+1] + luma[i+pw-1] + 2*luma[i+pw] + luma[i+pw+1];
+          out[i] = Math.min(255, (Math.abs(gx) + Math.abs(gy)) >> 1);
+        }
+      }
+      for (let i = 0; i < n; i++) {
+        const j = i * 4, e = out[i] > 40 ? out[i] : 0;
+        d[j] = e; d[j+1] = e * 0.69; d[j+2] = 0;   // Amber-Linien
+      }
+      return;
+    }
+
+    case "SONAR": {
+      // Aktive Bewegungszellen als Maske
+      const rows = Math.round(GRID * ph / pw);
+      const mask = new Uint8Array(GRID * rows);
+      for (const [mx, my] of motionCells)
+        mask[Math.round(my * rows) * GRID + Math.round(mx * GRID)] = 1;
+      const cellW = pw / GRID, cellH = ph / rows;
+      for (let y = 0; y < ph; y++) {
+        const cy = Math.min(rows - 1, (y / cellH) | 0);
+        for (let x = 0; x < pw; x++) {
+          const i = y * pw + x, j = i * 4;
+          const hot = mask[cy * GRID + Math.min(GRID - 1, (x / cellW) | 0)];
+          const v = luma[i];
+          if (hot) { d[j] = v * 0.2; d[j+1] = Math.min(255, v * 1.4 + 60); d[j+2] = 255; }
+          else     { d[j] = 0;       d[j+1] = v * 0.16;                    d[j+2] = v * 0.38 + 10; }
+        }
+      }
+      return;
+    }
+
+    case "PSX":
+      for (let i = 0; i < n; i++) {
+        const j = i * 4;
+        const b = (BAYER[(i & 3) + (((i / pw) | 0) & 3) * 4] - 8) * 2;
+        d[j]   = Math.max(0, Math.min(255, ((d[j]   + b) >> 5) << 5)) + 12;
+        d[j+1] = Math.max(0, Math.min(255, ((d[j+1] + b) >> 5) << 5)) + 12;
+        d[j+2] = Math.max(0, Math.min(255, ((d[j+2] + b) >> 5) << 5)) + 12;
+      }
+      return;
+  }
+}
+
+/* ================= HUD ================= */
+function drawHUD(now) {
+  const W = innerWidth, H = innerHeight;
+  hudX.clearRect(0, 0, W, H);
+  const alert = now < motionAlertUntil;
+  const col = alert ? "#FF2A2A" : "#FFB000";
+  hudX.font = "10px ui-monospace, Menlo, monospace";
+  hudX.lineWidth = 1;
+
+  // Eck-Klammern (atmen leicht)
+  const b = 26 + Math.sin(now / 600) * 2, m = 14, topM = m + (parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--safe-t")) || 0);
+  hudX.strokeStyle = col;
+  for (const [x, y, sx, sy] of [[m,topM,1,1],[W-m,topM,-1,1],[m,H-m,1,-1],[W-m,H-m,-1,-1]]) {
+    hudX.beginPath();
+    hudX.moveTo(x, y + sy * b); hudX.lineTo(x, y); hudX.lineTo(x + sx * b, y);
+    hudX.stroke();
+  }
+
+  // Fadenkreuz
+  const cx = W / 2, cy = H / 2, r = 34;
+  hudX.beginPath();
+  hudX.arc(cx, cy, r, 0, Math.PI * 2);
+  hudX.moveTo(cx - r - 12, cy); hudX.lineTo(cx - r + 8, cy);
+  hudX.moveTo(cx + r - 8, cy);  hudX.lineTo(cx + r + 12, cy);
+  hudX.moveTo(cx, cy - r - 12); hudX.lineTo(cx, cy - r + 8);
+  hudX.moveTo(cx, cy + r - 8);  hudX.lineTo(cx, cy + r + 12);
+  hudX.globalAlpha = 0.75; hudX.stroke(); hudX.globalAlpha = 1;
+
+  // Sonar-Sweep
+  if (mode === "SONAR") {
+    const ang = (now / 1400) % (Math.PI * 2);
+    const R = Math.hypot(W, H) / 2;
+    const g = hudX.createLinearGradient(cx, cy, cx + Math.cos(ang) * R, cy + Math.sin(ang) * R);
+    g.addColorStop(0, "rgba(53,224,255,0.35)"); g.addColorStop(1, "rgba(53,224,255,0)");
+    hudX.strokeStyle = g; hudX.lineWidth = 2;
+    hudX.beginPath(); hudX.moveTo(cx, cy);
+    hudX.lineTo(cx + Math.cos(ang) * R, cy + Math.sin(ang) * R); hudX.stroke();
+    hudX.lineWidth = 1;
+  }
+
+  // Bewegungsboxen
+  hudX.strokeStyle = alert ? "#FF2A2A" : "rgba(255,176,0,0.8)";
+  for (const [x, y, w, h] of motionCells) {
+    const px = x * W, py = y * H, pw2 = w * W, ph2 = h * H, c = 7;
+    hudX.beginPath();
+    hudX.moveTo(px, py + c); hudX.lineTo(px, py); hudX.lineTo(px + c, py);
+    hudX.moveTo(px + pw2 - c, py); hudX.lineTo(px + pw2, py); hudX.lineTo(px + pw2, py + c);
+    hudX.moveTo(px + pw2, py + ph2 - c); hudX.lineTo(px + pw2, py + ph2); hudX.lineTo(px + pw2 - c, py + ph2);
+    hudX.moveTo(px + c, py + ph2); hudX.lineTo(px, py + ph2); hudX.lineTo(px, py + ph2 - c);
+    hudX.stroke();
+  }
+
+  // Bewegungs-Blips
+  hudX.fillStyle = alert ? "rgba(255,70,70,0.9)" : "rgba(255,200,70,0.9)";
+  for (let i = 0; i < motionPoints.length; i += 2)
+    hudX.fillRect(motionPoints[i] * W - 1, motionPoints[i + 1] * H - 1, 2, 2);
+
+  // Ziel-Lock + Live-Zoom-Fenster
+  if (lock) {
+    const lx = lock.x * W, ly = lock.y * H;
+    hudX.strokeStyle = "#35E0FF";
+    hudX.strokeRect(lx - 22, ly - 22, 44, 44);
+    hudX.beginPath();
+    hudX.moveTo(lx - 32, ly); hudX.lineTo(lx - 14, ly);
+    hudX.moveTo(lx + 14, ly); hudX.lineTo(lx + 32, ly);
+    hudX.moveTo(lx, ly - 32); hudX.lineTo(lx, ly - 14);
+    hudX.moveTo(lx, ly + 14); hudX.lineTo(lx, ly + 32);
+    hudX.stroke();
+    hudX.fillStyle = "#35E0FF";
+    hudX.fillText("LOCKED // TAP = UNLOCK", Math.min(lx + 28, W - 150), ly - 28);
+
+    if (video.videoWidth) {
+      const pipW = Math.min(170, W * 0.42), pipH = pipW * 0.75;
+      const px = W - pipW - m, py = topM + b + 56;
+      const zoom = 3;
+      const sw = video.videoWidth / zoom, sh = video.videoHeight / zoom;
+      const sx = Math.max(0, Math.min(video.videoWidth - sw, lock.x * video.videoWidth - sw / 2));
+      const sy = Math.max(0, Math.min(video.videoHeight - sh, lock.y * video.videoHeight - sh / 2));
+      hudX.drawImage(video, sx, sy, sw, sh, px, py, pipW, pipH);
+      hudX.strokeStyle = "#35E0FF";
+      hudX.strokeRect(px, py, pipW, pipH);
+      hudX.beginPath();
+      hudX.moveTo(px + pipW / 2 - 10, py + pipH / 2); hudX.lineTo(px + pipW / 2 + 10, py + pipH / 2);
+      hudX.moveTo(px + pipW / 2, py + pipH / 2 - 10); hudX.lineTo(px + pipW / 2, py + pipH / 2 + 10);
+      hudX.stroke();
+      hudX.fillStyle = "#35E0FF";
+      hudX.fillText("LIVE CROP 3.0x  X" + Math.round(lock.x * 999) + " Y" + Math.round(lock.y * 999), px, py + pipH + 12);
+      hudX.globalAlpha = 0.45;
+      hudX.beginPath(); hudX.moveTo(lx, ly); hudX.lineTo(px, py + pipH); hudX.stroke();
+      hudX.globalAlpha = 1;
+    }
+  }
+
+  // Radar-Widget
+  const rr = 40, rcx = W - m - rr - 6, rcy = H - rr - 155;
+  hudX.fillStyle = "rgba(0,0,0,0.5)";
+  hudX.strokeStyle = alert ? "#FF2A2A" : "rgba(255,176,0,0.75)";
+  hudX.beginPath(); hudX.arc(rcx, rcy, rr, 0, Math.PI * 2); hudX.fill(); hudX.stroke();
+  hudX.globalAlpha = 0.35;
+  hudX.beginPath(); hudX.arc(rcx, rcy, rr * 0.66, 0, Math.PI * 2); hudX.stroke();
+  hudX.beginPath(); hudX.arc(rcx, rcy, rr * 0.33, 0, Math.PI * 2); hudX.stroke();
+  hudX.globalAlpha = 1;
+  const ra = (now / 900) % (Math.PI * 2);
+  hudX.beginPath(); hudX.moveTo(rcx, rcy);
+  hudX.lineTo(rcx + Math.cos(ra) * rr, rcy + Math.sin(ra) * rr); hudX.stroke();
+  hudX.save();
+  hudX.beginPath(); hudX.arc(rcx, rcy, rr - 2, 0, Math.PI * 2); hudX.clip();
+  hudX.fillStyle = alert ? "#FF2A2A" : "#FFB000";
+  for (let i = 0; i < motionPoints.length; i += 14)
+    hudX.fillRect(rcx - rr + motionPoints[i] * rr * 2 - 1, rcy - rr + motionPoints[i + 1] * rr * 2 - 1, 2, 2);
+  hudX.restore();
+  hudX.fillStyle = alert ? "#FF2A2A" : "#FFB000";
+  hudX.fillText("RADAR", rcx - rr, rcy - rr - 8);
+  hudX.fillText("BLIPS " + (motionPoints.length >> 1), rcx - rr, rcy + rr + 14);
+
+  // KI-Boxen
+  if (aiEnabled) {
+    hudX.strokeStyle = "#35E0FF"; hudX.fillStyle = "#35E0FF";
+    for (const bx of aiBoxes) {
+      const px = bx.x * W, py = bx.y * H;
+      hudX.strokeRect(px, py, bx.w * W, bx.h * H);
+      hudX.fillText("DET // " + bx.label + " " + Math.round(bx.score * 100) + "%", px + 3, py - 4);
+    }
+  }
+
+  // Statuszeilen
+  hudX.fillStyle = col;
+  const t = new Date();
+  const clock = [t.getHours(), t.getMinutes(), t.getSeconds()].map(v => String(v).padStart(2, "0")).join(":");
+  hudX.fillText("MODE/" + mode, m + 4, topM + b + 16);
+  hudX.fillText(clock + "  FPS/" + fps, m + 4, topM + b + 30);
+  const hd = heading != null ? "HDG " + String(Math.round(heading)).padStart(3, "0") + "°" : "HDG ---";
+  hudX.textAlign = "right";
+  hudX.fillText(hd, W - m - 4, topM + b + 16);
+  hudX.fillText("MOT " + String(Math.min(99, Math.round(motionLevel * 400))).padStart(2, "0") + "%", W - m - 4, topM + b + 30);
+  const pr = (pitch != null)
+    ? "PIT " + pitch.toFixed(0) + "\u00B0  ROL " + roll.toFixed(0) + "\u00B0"
+    : "PIT ---  ROL ---";
+  hudX.fillText(pr, W - m - 4, topM + b + 44);
+  hudX.textAlign = "left";
+  const geo = gps ? gps.latitude.toFixed(5) + " / " + gps.longitude.toFixed(5) + "  ±" + Math.round(gps.accuracy) + "m" : "GEO UPLINK: NO FIX";
+  hudX.fillText(geo, m + 4, H - m - b - 78);
+
+  if (alert) {
+    hudX.textAlign = "center";
+    hudX.font = "bold 13px ui-monospace, Menlo, monospace";
+    hudX.fillText("▲ MOVEMENT DETECTED ▲", cx, cy - r - 26);
+    hudX.textAlign = "left";
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && running) { prevLuma = null; }
+});
+</script>
+</body>
+</html>
