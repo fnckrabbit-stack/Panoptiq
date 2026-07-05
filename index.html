@@ -74,8 +74,9 @@
   }
   .chip.active { color: var(--bg); background: var(--amber); border-color: var(--amber); }
   .chip.ai-on { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
-  #subrow { display:flex; align-items:center; gap:12px; font-size:10px; letter-spacing:0.15em; color:var(--amber-dim); }
-  #sens { flex:1; accent-color: var(--amber); height: 22px; }
+  #subrow { display:flex; align-items:center; gap:12px; font-size:10px; letter-spacing:0.15em; color:var(--amber-dim); overflow-x:auto; scrollbar-width:none; }
+  #subrow::-webkit-scrollbar { display:none; }
+  #sens { flex: 0 0 84px; accent-color: var(--amber); height: 22px; }
 
   /* ---------- Tools panel / Report / Scanlines ---------- */
   #scan {
@@ -133,9 +134,9 @@
     <span>SENS</span>
     <input id="sens" type="range" min="1" max="10" value="5">
     <button id="trkBtn" class="chip active">TRK</button>
+    <button id="aiBtn" class="chip">AI: OFF</button>
     <button id="snapBtn" class="chip">SNAP</button>
     <button id="toolsBtn" class="chip">TOOLS</button>
-    <button id="aiBtn" class="chip">AI: OFF</button>
   </div>
 </div>
 
