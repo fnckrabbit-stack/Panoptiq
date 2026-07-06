@@ -204,6 +204,8 @@
 <script>
 "use strict";
 
+const BUILD = "8";
+
 /* ================= State ================= */
 const MODES = ["RAW","EDGE","THERMAL","NVIS","SONAR","PSX","ASCII"];
 let mode = "RAW";
@@ -247,6 +249,7 @@ let diffT = 26;                // Pixel-Schwellwert: niedriger = empfindlicher
 /* ================= Boot sequence ================= */
 const bootLines = [
   "loading kernel .............. [ok]",
+  "build revision " + BUILD + " ............ [ok]",
   "optic pipeline .............. [ok]",
   "motion diff engine .......... [ok]",
   "render modes x6 ............. [ok]",
@@ -1229,6 +1232,12 @@ function drawHUD(now) {
 
   // KI-Boxen
   if (aiEnabled) {
+    if (aiModel && !aiBoxes.length) {
+      hudX.fillStyle = "#35E0FF";
+      hudX.textAlign = "center";
+      hudX.fillText("AI // SCANNING\u2026", W / 2, topM + b + 40);
+      hudX.textAlign = "left";
+    }
     hudX.strokeStyle = "#35E0FF"; hudX.fillStyle = "#35E0FF";
     for (const bx of aiBoxes) {
       const px = bx.x * W, py = bx.y * H;
