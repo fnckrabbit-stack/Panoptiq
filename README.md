@@ -1,2 +1,2 @@
 panoptiq
-v10
+v10.0
