@@ -177,8 +177,8 @@
   </div>
   <div class="tlabel">DIGITAL CAMERA ZOOM: <span id="zoomVal">1.0x</span></div>
   <input class="tslider" id="zoomSl" type="range" min="10" max="50" value="10">
-  <div class="tlabel">MOTION SENSITIVITY &mdash; LOWER DETECTS MORE: <span id="diffVal">26</span></div>
-  <input class="tslider" id="diffSl" type="range" min="8" max="70" value="26">
+  <div class="tlabel">MOTION SENSITIVITY &mdash; LOWER DETECTS MORE: <span id="diffVal">20</span></div>
+  <input class="tslider" id="diffSl" type="range" min="8" max="70" value="20">
   <div class="tlabel">MAX TRACK WINDOWS: <span id="trkMaxVal">2</span></div>
   <input class="tslider" id="trkMaxSl" type="range" min="0" max="4" value="2">
   <div class="tlabel">MOTION ARRAY DENSITY &mdash; MAX POINTS: <span id="densVal">2400</span></div>
@@ -206,7 +206,7 @@
 <script>
 "use strict";
 
-const BUILD = "9";
+const BUILD = "10";
 
 /* ================= State ================= */
 const MODES = ["RAW","EDGE","THERMAL","NVIS","SONAR","PSX","ASCII"];
@@ -246,7 +246,8 @@ const proc  = document.createElement("canvas");
 const procX = proc.getContext("2d", { willReadFrequently: true });
 
 const GRID = 10;               // motion grid columns
-let diffT = 26;                // Pixel-Schwellwert: niedriger = empfindlicher
+let diffT = 20;                // Pixel-Schwellwert: niedriger = empfindlicher
+let blipBuf = [];              // Nachleuchtende Blips: [x, y, expiresAt, ...]
 
 /* ================= Boot sequence ================= */
 const bootLines = [
@@ -811,7 +812,7 @@ function loop(now) {
         const i = y * pw + x;
         if (Math.abs(luma[i] - prevLuma[i]) > diffT) {
           cellHits[cy * GRID + Math.min(GRID - 1, (x / cellW) | 0)]++;
-          if ((hits % 4) === 0 && motionPoints.length < blipMax)
+          if ((hits % 2) === 0 && motionPoints.length < blipMax)
             motionPoints.push(x / pw, y / ph);
           hits++;
         }
@@ -827,6 +828,14 @@ function loop(now) {
       if (cellHits[cy * GRID + cx] > cellMin) motionCells.push([cx / GRID, cy / rows, 1 / GRID, 1 / rows]);
   const cellRatio = motionCells.length / (GRID * rows);
   if (motionCells.length > 0 && cellRatio < 0.55) motionAlertUntil = now + 900;
+
+  // Blip-Nachleuchten: frische Punkte kommen dazu, alte verblassen ~0,5s lang
+  const nb = [];
+  for (let i = 0; i < blipBuf.length; i += 3)
+    if (blipBuf[i + 2] > now) nb.push(blipBuf[i], blipBuf[i + 1], blipBuf[i + 2]);
+  for (let i = 0; i < motionPoints.length; i += 2)
+    nb.push(motionPoints[i], motionPoints[i + 1], now + 500);
+  blipBuf = nb.length > blipMax * 3 ? nb.slice(nb.length - blipMax * 3) : nb;
 
   // Lock folgt der nächstgelegenen Bewegung (sanftes Tracking)
   if (lock && motionCells.length) {
@@ -1121,11 +1130,14 @@ function drawHUD(now) {
     hudX.stroke();
   }
 
-  // Bewegungs-Blips
+  // Bewegungs-Blips (mit Nachleuchten)
   if (showBlips) {
-    hudX.fillStyle = alert ? "rgba(255,70,70,0.9)" : T.blip;
-    for (let i = 0; i < motionPoints.length; i += 2)
-      hudX.fillRect(motionPoints[i] * W - 1, motionPoints[i + 1] * H - 1, 2, 2);
+    hudX.fillStyle = alert ? "rgba(255,70,70,0.95)" : T.blip;
+    for (let i = 0; i < blipBuf.length; i += 3) {
+      hudX.globalAlpha = 0.2 + Math.max(0, Math.min(1, (blipBuf[i + 2] - now) / 500)) * 0.75;
+      hudX.fillRect(blipBuf[i] * W - 1, blipBuf[i + 1] * H - 1, 2, 2);
+    }
+    hudX.globalAlpha = 1;
   }
   const vr = video.videoWidth ? vidRect() : null;
 
@@ -1249,12 +1261,12 @@ function drawHUD(now) {
   hudX.save();
   hudX.beginPath(); hudX.arc(rcx, rcy, rr - 2, 0, Math.PI * 2); hudX.clip();
   hudX.fillStyle = alert ? "#FF2A2A" : T.main;
-  for (let i = 0; i < motionPoints.length; i += 14)
-    hudX.fillRect(rcx - rr + motionPoints[i] * rr * 2 - 1, rcy - rr + motionPoints[i + 1] * rr * 2 - 1, 2, 2);
+  for (let i = 0; i < blipBuf.length; i += 21)
+    hudX.fillRect(rcx - rr + blipBuf[i] * rr * 2 - 1, rcy - rr + blipBuf[i + 1] * rr * 2 - 1, 2, 2);
   hudX.restore();
   hudX.fillStyle = alert ? "#FF2A2A" : T.main;
   hudX.fillText("RADAR", rcx - rr, rcy - rr - 8);
-  hudX.fillText("BLIPS " + (motionPoints.length >> 1), rcx - rr, rcy + rr + 14);
+  hudX.fillText("BLIPS " + Math.round(blipBuf.length / 3), rcx - rr, rcy + rr + 14);
   }
 
   // KI-Boxen
