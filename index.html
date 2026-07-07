@@ -179,6 +179,8 @@
   <input class="tslider" id="zoomSl" type="range" min="10" max="50" value="10">
   <div class="tlabel">MOTION SENSITIVITY &mdash; LOWER DETECTS MORE: <span id="diffVal">26</span></div>
   <input class="tslider" id="diffSl" type="range" min="8" max="70" value="26">
+  <div class="tlabel">MAX TRACK WINDOWS: <span id="trkMaxVal">2</span></div>
+  <input class="tslider" id="trkMaxSl" type="range" min="0" max="4" value="2">
   <div class="tlabel">MOTION ARRAY DENSITY &mdash; MAX POINTS: <span id="densVal">2400</span></div>
   <input class="tslider" id="densSl" type="range" min="200" max="6000" step="100" value="2400">
   <button id="toolsClose" class="chip" style="margin-top:26px;width:100%;padding:14px;">TOOLS CLOSE</button>
@@ -204,17 +206,17 @@
 <script>
 "use strict";
 
-const BUILD = "8";
+const BUILD = "9";
 
 /* ================= State ================= */
 const MODES = ["RAW","EDGE","THERMAL","NVIS","SONAR","PSX","ASCII"];
 let mode = "RAW";
 let sensitivity = 5;
-let aiEnabled = false, aiModel = null, aiLoading = false, aiBoxes = [], aiLastRun = 0;
+let aiEnabled = false, aiModel = null, aiLoading = false, aiBoxes = [], aiLastRun = 0, aiRuns = 0, aiErr = 0;
 let gps = null, heading = null;
 let motionLevel = 0, motionCells = [], motionAlertUntil = 0, motionPoints = [];
 let lock = null, pitch = null, roll = null;
-let tracks = [], nextTrackId = 1, autoTrack = true;
+let tracks = [], nextTrackId = 1, autoTrack = true, maxTracks = 2;
 let showBlips = true, showRadar = true, showHud = true, autoLock = false;
 let digitalZoom = 1, blipMax = 2400, camFacing = "environment";
 let rec = null;
@@ -383,6 +385,11 @@ document.getElementById("diffSl").addEventListener("input", e => {
   diffT = +e.target.value;
   document.getElementById("diffVal").textContent = diffT;
 });
+document.getElementById("trkMaxSl").addEventListener("input", e => {
+  maxTracks = +e.target.value;
+  document.getElementById("trkMaxVal").textContent = maxTracks;
+  if (tracks.length > maxTracks) tracks = tracks.slice(0, maxTracks);
+});
 
 document.getElementById("camSwitch").addEventListener("click", async () => {
   if (!running) return;
@@ -513,14 +520,21 @@ aiBtn.addEventListener("click", async () => {
   if (!aiModel) {
     aiLoading = true; aiBtn.textContent = "AI: LOADING…";
     try {
-      await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js");
-      await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js");
+      await loadScriptAny([
+        "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js",
+        "https://unpkg.com/@tensorflow/tfjs@4.17.0/dist/tf.min.js"
+      ]);
+      await loadScriptAny([
+        "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js",
+        "https://unpkg.com/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"
+      ]);
       aiModel = await cocoSsd.load({ base: "lite_mobilenet_v2" });
     } catch (e) {
       aiBtn.textContent = "AI: FAILED"; aiLoading = false; return;
     }
     aiLoading = false;
   }
+  aiRuns = 0; aiErr = 0;
   aiEnabled = true;
   aiBtn.textContent = "AI: ON"; aiBtn.classList.add("ai-on");
 });
@@ -540,6 +554,13 @@ function loadScript(src) {
     s.src = src; s.onload = res; s.onerror = rej;
     document.head.appendChild(s);
   });
+}
+async function loadScriptAny(srcs) {
+  let lastErr = null;
+  for (const src of srcs) {
+    try { return await loadScript(src); } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("load failed");
 }
 
 /* ================= Themes ================= */
@@ -804,7 +825,8 @@ function loop(now) {
   for (let cy = 0; cy < rows; cy++)
     for (let cx = 0; cx < GRID; cx++)
       if (cellHits[cy * GRID + cx] > cellMin) motionCells.push([cx / GRID, cy / rows, 1 / GRID, 1 / rows]);
-  if (motionCells.length > 0) motionAlertUntil = now + 900;
+  const cellRatio = motionCells.length / (GRID * rows);
+  if (motionCells.length > 0 && cellRatio < 0.55) motionAlertUntil = now + 900;
 
   // Lock folgt der nächstgelegenen Bewegung (sanftes Tracking)
   if (lock && motionCells.length) {
@@ -845,13 +867,13 @@ function loop(now) {
       }
     }
     for (const c of cents)
-      if (!c.used && tracks.length < 4)
-        tracks.push({ id: nextTrackId++, x: c.x, y: c.y, vx: 0, vy: 0, seen: now });
+      if (!c.used && tracks.length < maxTracks && cellRatio < 0.45)
+        tracks.push({ id: nextTrackId++, x: c.x, y: c.y, vx: 0, vy: 0, seen: now, born: now });
     tracks = tracks.filter(t => now - t.seen < 1600);
   }
 
   // Auto-Lock: stärkstes Bewegungsareal automatisch anvisieren
-  if (autoLock && !lock && motionCells.length >= 3) {
+  if (autoLock && !lock && motionCells.length >= 3 && cellRatio < 0.45) {
     let asx = 0, asy = 0;
     for (const [mx, my, mw2, mh2] of motionCells) { asx += mx + mw2 / 2; asy += my + mh2 / 2; }
     lock = { x: asx / motionCells.length, y: asy / motionCells.length, auto: true, seen: now };
@@ -934,8 +956,9 @@ function loop(now) {
   if (aiEnabled && aiModel && now - aiLastRun > 600) {
     aiLastRun = now;
     aiModel.detect(video).then(preds => {
+      aiRuns++;
       const vz = vidRect();
-      const fresh = preds.filter(p => p.score > 0.5).map(p => ({
+      const fresh = preds.filter(p => p.score > 0.45).map(p => ({
         x: (p.bbox[0] - vz.sx) / vz.sw, y: (p.bbox[1] - vz.sy) / vz.sh,
         w: p.bbox[2] / vz.sw, h: p.bbox[3] / vz.sh,
         label: p.class.toUpperCase(), score: p.score
@@ -965,7 +988,7 @@ function loop(now) {
             aiBoxes.map(bx => bx.label + " " + Math.round(bx.score * 100) + "%").join(", "));
         }
       }
-    }).catch(() => {});
+    }).catch(() => { aiErr++; });
   }
 }
 
@@ -1158,6 +1181,7 @@ function drawHUD(now) {
       [m, H * 0.58]
     ];
     hudX.save();
+    let win = 0;
     tracks.forEach((t, i) => {
       const colT = i % 2 ? "#FF5A5A" : T.main;
       const tx = t.x * W, ty = t.y * H;
@@ -1186,22 +1210,25 @@ function drawHUD(now) {
         hudX.setLineDash([]);
       }
 
-      const [px, py] = slots[i];
-      const zoom = 2.5;
-      const sw = vr.sw / zoom, sh = vr.sh / zoom;
-      const sx = Math.max(0, Math.min(video.videoWidth - sw, vr.sx + t.x * vr.sw - sw / 2));
-      const sy = Math.max(0, Math.min(video.videoHeight - sh, vr.sy + t.y * vr.sh - sh / 2));
-      hudX.drawImage(video, sx, sy, sw, sh, px, py, tw, th);
-      hudX.strokeRect(px, py, tw, th);
-      hudX.beginPath();
-      hudX.moveTo(px + tw / 2 - 8, py + th / 2); hudX.lineTo(px + tw / 2 + 8, py + th / 2);
-      hudX.moveTo(px + tw / 2, py + th / 2 - 8); hudX.lineTo(px + tw / 2, py + th / 2 + 8);
-      hudX.stroke();
-      hudX.fillText("AUTO TRACK // " + name, px, py - 5);
-      hudX.fillText("X" + Math.round(t.x * 999) + " Y" + Math.round(t.y * 999) + "  Z:2.5x", px, py + th + 12);
-      hudX.globalAlpha = 0.4;
-      hudX.beginPath(); hudX.moveTo(tx, ty); hudX.lineTo(px + tw / 2, py + th / 2); hudX.stroke();
-      hudX.globalAlpha = 1;
+      // Fenster erst zeigen, wenn der Track stabil ist (verhindert Flacker-Fenster)
+      if (now - (t.born || 0) > 700 && win < slots.length) {
+        const [px, py] = slots[win++];
+        const zoom = 2.5;
+        const sw = vr.sw / zoom, sh = vr.sh / zoom;
+        const sx = Math.max(0, Math.min(video.videoWidth - sw, vr.sx + t.x * vr.sw - sw / 2));
+        const sy = Math.max(0, Math.min(video.videoHeight - sh, vr.sy + t.y * vr.sh - sh / 2));
+        hudX.drawImage(video, sx, sy, sw, sh, px, py, tw, th);
+        hudX.strokeRect(px, py, tw, th);
+        hudX.beginPath();
+        hudX.moveTo(px + tw / 2 - 8, py + th / 2); hudX.lineTo(px + tw / 2 + 8, py + th / 2);
+        hudX.moveTo(px + tw / 2, py + th / 2 - 8); hudX.lineTo(px + tw / 2, py + th / 2 + 8);
+        hudX.stroke();
+        hudX.fillText("AUTO TRACK // " + name, px, py - 5);
+        hudX.fillText("X" + Math.round(t.x * 999) + " Y" + Math.round(t.y * 999) + "  Z:2.5x", px, py + th + 12);
+        hudX.globalAlpha = 0.4;
+        hudX.beginPath(); hudX.moveTo(tx, ty); hudX.lineTo(px + tw / 2, py + th / 2); hudX.stroke();
+        hudX.globalAlpha = 1;
+      }
     });
     hudX.restore();
   }
@@ -1233,9 +1260,9 @@ function drawHUD(now) {
   // KI-Boxen
   if (aiEnabled) {
     if (aiModel && !aiBoxes.length) {
-      hudX.fillStyle = "#35E0FF";
+      hudX.fillStyle = aiErr > 3 ? "#FF2A2A" : "#35E0FF";
       hudX.textAlign = "center";
-      hudX.fillText("AI // SCANNING\u2026", W / 2, topM + b + 40);
+      hudX.fillText(aiErr > 3 ? "AI // ERROR \u2014 SEITE NEU LADEN" : "AI // SCANNING\u2026 [" + aiRuns + "]", W / 2, topM + b + 40);
       hudX.textAlign = "left";
     }
     hudX.strokeStyle = "#35E0FF"; hudX.fillStyle = "#35E0FF";
